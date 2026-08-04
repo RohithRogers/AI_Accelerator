@@ -29,7 +29,7 @@ words to pull from Instruction Memory before it can start executing
     ------   --------   -----------   --------------------------------------
     0x00     NOP        1             (none)
     0x01     LOAD       3             W1: [31:16]=mem_addr   [15:0]=sp_addr
-                                       W2: [31:16]=length     [15:0]=reserved
+                                       W2: [31:16]=length      [15:0]=reserved
     0x02     STORE      3             W1: [31:16]=sp_addr    [15:0]=mem_addr
                                        W2: [31:16]=length     [15:0]=reserved
     0x03     DENSE      4             W1: [31:16]=input_addr [15:0]=weight_addr

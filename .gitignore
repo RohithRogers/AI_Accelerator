@@ -1,3 +1,6 @@
 .agents
 /__pycache__
 sw/compiler/__pycache__
+a.exe
+/sim_*
+/test.cpp

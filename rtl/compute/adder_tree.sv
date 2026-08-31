@@ -7,7 +7,7 @@
 import tinyml_pkg::*;
 
 module adder_tree #(
-    parameter int SIMD_WIDTH = 4,  // Number of elements to sum (W=4)
+    parameter int SIMD_WIDTH = 8,  // Number of elements to sum (W=4)
     parameter int ACC_WIDTH  = 32  // Wider width to prevent mathematical overflow
 ) (
     input  logic signed [15:0]      products[SIMD_WIDTH], // Products from multipliers

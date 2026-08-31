@@ -7,7 +7,7 @@
 import tinyml_pkg::*;
 
 module dense_engine #(
-    parameter int SIMD_WIDTH     = 4,
+    parameter int SIMD_WIDTH = 8,
     parameter int ACC_WIDTH      = 32,
     parameter int REQUANT_SHIFT  = 0,
     parameter int RELU6_MAX      = 127

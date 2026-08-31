@@ -8,7 +8,7 @@
 import tinyml_pkg::*;
 
 module vector_loader #(
-    parameter int SIMD_WIDTH = 4 // Processing lanes (W=4)
+    parameter int SIMD_WIDTH = 8 // Processing lanes (W=4)
 ) (
     input  logic        clk,
     input  logic        rst_n,

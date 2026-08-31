@@ -7,7 +7,7 @@
 import tinyml_pkg::*;
 
 module simd_mac_array #(
-    parameter int SIMD_WIDTH = 4 // Number of parallel operations (default W=4)
+    parameter int SIMD_WIDTH = 8 // Number of parallel operations (default W=4)
 ) (
     // Inputs: 4 signed 8-bit inputs and 4 weights
     input  logic signed [7:0]     act_data   [SIMD_WIDTH], 

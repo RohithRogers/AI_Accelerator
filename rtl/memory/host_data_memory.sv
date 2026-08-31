@@ -34,16 +34,17 @@ module host_data_memory #(
 
   logic signed [7:0] mem [0:DEPTH-1];
 
+  // Synchronous True Dual-Port Read/Write (Single-clock Vivado BRAM Template)
   always_ff @(posedge clk) begin
+    // Port A
     if (a_wr_en) begin
       mem[a_wr_addr] <= a_wr_data;
     end
     if (a_rd_en) begin
       a_rd_data <= mem[a_rd_addr];
     end
-  end
 
-  always_ff @(posedge clk) begin
+    // Port B
     if (b_wr_en) begin
       mem[b_wr_addr] <= b_wr_data;
     end

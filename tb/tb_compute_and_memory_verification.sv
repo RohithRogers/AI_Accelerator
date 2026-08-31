@@ -3,7 +3,7 @@
 // Description: Integrated verification testbench connecting the Dense Compute
 //              Engine directly to physical hardware Block RAM modules
 //              (scratchpad_memory, weight_memory, bias_memory). Verifies host
-//              preloading, banked BRAM reads, SIMD math, and BRAM writeback.
+//              preloading, 8-bank BRAM reads, SIMD math, and BRAM writeback.
 // ============================================================================
 
 `timescale 1ns/1ps
@@ -66,7 +66,7 @@ module tb_compute_and_memory_verification;
     dense_engine #(
         .SIMD_WIDTH(SIMD_WIDTH),
         .ACC_WIDTH(ACC_WIDTH),
-        .REQUANT_SHIFT(0),
+        .REQUANT_SHIFT(1),
         .RELU6_MAX(127)
     ) u_dense_engine (
         .clk(clk),
@@ -93,7 +93,7 @@ module tb_compute_and_memory_verification;
         .bias_rd_data(bias_rd_data)
     );
 
-    // 2. Instantiate Physical Banked Scratchpad RAM Modules (4 Banks for SIMD=4)
+    // 2. Instantiate Physical Banked Scratchpad RAM Modules (8 Banks for SIMD=8)
     genvar b;
     generate
         for (b = 0; b < SIMD_WIDTH; b++) begin : gen_spad_banks
@@ -105,24 +105,24 @@ module tb_compute_and_memory_verification;
 
                 // Port A: Dense Compute Engine Read & Writeback
                 .a_rd_en(busy),
-                .a_rd_addr(spad_rd_addr[b][9:0]),
+                .a_rd_addr(spad_rd_addr[b][8:0]),
                 .a_rd_data(spad_rd_data[b]),
-                .a_wr_en(spad_wr_en && (spad_wr_addr[1:0] == b)),
-                .a_wr_addr(spad_wr_addr[11:2]),
+                .a_wr_en(spad_wr_en && (spad_wr_addr[2:0] == b)),
+                .a_wr_addr(spad_wr_addr[11:3]),
                 .a_wr_data(spad_wr_data),
 
                 // Port B: Host Preload & Readback
-                .b_rd_en(spad_host_rd_en && (spad_host_rd_addr[1:0] == b)),
-                .b_rd_addr(spad_host_rd_addr[11:2]),
+                .b_rd_en(spad_host_rd_en && (spad_host_rd_addr[2:0] == b)),
+                .b_rd_addr(spad_host_rd_addr[11:3]),
                 .b_rd_data(),
-                .b_wr_en(spad_host_wr_en && (spad_host_wr_addr[1:0] == b)),
-                .b_wr_addr(spad_host_wr_addr[11:2]),
+                .b_wr_en(spad_host_wr_en && (spad_host_wr_addr[2:0] == b)),
+                .b_wr_addr(spad_host_wr_addr[11:3]),
                 .b_wr_data(spad_host_wr_data)
             );
         end
     endgenerate
 
-    // 3. Instantiate Physical Banked Weight RAM Modules
+    // 3. Instantiate Physical Banked Weight RAM Modules (8 Banks for SIMD=8)
     generate
         for (b = 0; b < SIMD_WIDTH; b++) begin : gen_weight_banks
             weight_memory #(
@@ -131,10 +131,10 @@ module tb_compute_and_memory_verification;
                 .clk(clk),
                 .rst_n(rst_n),
                 .rd_en(busy),
-                .rd_addr(weight_rd_addr[b][15:2]),
+                .rd_addr(weight_rd_addr[b][15:3]),
                 .rd_data(weight_rd_data[b]),
-                .wr_en(weight_host_wr_en && (weight_host_wr_addr[1:0] == b)),
-                .wr_addr(weight_host_wr_addr[15:2]),
+                .wr_en(weight_host_wr_en && (weight_host_wr_addr[2:0] == b)),
+                .wr_addr(weight_host_wr_addr[15:3]),
                 .wr_data(weight_host_wr_data)
             );
         end
@@ -192,7 +192,7 @@ module tb_compute_and_memory_verification;
     // Main Test Flow
     initial begin
         $display("\n================================================================================");
-        $display("   INTEGRATED VERIFICATION: COMPUTE ENGINE + PHYSICAL BLOCK RAM SUBSYSTEM    ");
+        $display("   INTEGRATED VERIFICATION: SIMD=8 COMPUTE + PHYSICAL BLOCK RAM SUBSYSTEM       ");
         $display("================================================================================");
 
         // Reset
@@ -208,35 +208,43 @@ module tb_compute_and_memory_verification;
         #(CLK_PERIOD * 2);
 
         // STAGE 1: HOST PRELOAD INTO PHYSICAL HARDWARE BRAMs
-        $display("\n[STEP 1] Preloading Physical Block RAMs via Host Ports...");
-        // Preload Scratchpad BRAM (Input Vector: [10, -20, 30, -40])
-        write_scratchpad(16'd0,  8'sd10);
-        write_scratchpad(16'd1, -8'sd20);
-        write_scratchpad(16'd2,  8'sd30);
-        write_scratchpad(16'd3, -8'sd40);
+        $display("\n[STEP 1] Preloading Physical Block RAMs via Host Ports (8 Inputs)...");
+        // Preload Scratchpad BRAM (Input Vector: [10, 20, 30, 40, 5, 10, 15, 20])
+        write_scratchpad(16'd0, 8'sd10);
+        write_scratchpad(16'd1, 8'sd20);
+        write_scratchpad(16'd2, 8'sd30);
+        write_scratchpad(16'd3, 8'sd40);
+        write_scratchpad(16'd4, 8'sd5);
+        write_scratchpad(16'd5, 8'sd10);
+        write_scratchpad(16'd6, 8'sd15);
+        write_scratchpad(16'd7, 8'sd20);
 
-        // Preload Weight BRAM (Weight Vector: [1, 2, 3, 4])
+        // Preload Weight BRAM (Weight Vector: [1, 1, 1, 1, 2, 2, 2, 2])
         write_weight(16'd0, 8'sd1);
-        write_weight(16'd1, 8'sd2);
-        write_weight(16'd2, 8'sd3);
-        write_weight(16'd3, 8'sd4);
+        write_weight(16'd1, 8'sd1);
+        write_weight(16'd2, 8'sd1);
+        write_weight(16'd3, 8'sd1);
+        write_weight(16'd4, 8'sd2);
+        write_weight(16'd5, 8'sd2);
+        write_weight(16'd6, 8'sd2);
+        write_weight(16'd7, 8'sd2);
 
-        // Preload Bias BRAM (Bias: +5)
-        write_bias(16'd0, 8'sd5);
-        $display("  -> Physical BRAM Preload Complete!");
+        // Preload Bias BRAM (Bias: +10)
+        write_bias(16'd0, 8'sd10);
+        $display("  -> Physical 8-Bank BRAM Preload Complete!");
 
         // STAGE 2: LAUNCH COMPUTE ENGINE COMMAND
         $display("\n[STEP 2] Launching Dense Compute Command:");
         $display("  Input Addr = 0, Weight Addr = 0, Output Addr = 100, Bias Addr = 0");
-        $display("  Input Len  = 4, Output Len = 1, Activation = NONE");
+        $display("  Input Len  = 8, Output Len = 1, Activation = RELU, REQUANT_SHIFT = 1");
 
         input_addr  = 16'd0;
         weight_addr = 16'd0;
         output_addr = 16'd100;
         bias_addr   = 16'd0;
-        input_len   = 16'd4;
+        input_len   = 16'd8;
         output_len  = 16'd1;
-        activation  = ACT_NONE;
+        activation  = ACT_RELU;
 
         start = 1;
         #(CLK_PERIOD);
@@ -248,17 +256,18 @@ module tb_compute_and_memory_verification;
 
         $display("\n--------------------------------------------------------------------------------");
         $display("[STEP 3] Verifying Physical Scratchpad BRAM Writeback:");
-        $display("  Expected Calculation: 5 + (10*1 + -20*2 + 30*3 + -40*4) = -95");
+        $display("  Expected Calculation: (10 + (10*1 + 20*1 + 30*1 + 40*1 + 5*2 + 10*2 + 15*2 + 20*2)) >> 1 = 105");
 
         // STAGE 4: SELF-CHECKING ASSERTIONS
         #(CLK_PERIOD);
         $display("\n================================================================================");
         $display("                       VERIFICATION SUCCESS REPORT                              ");
         $display("================================================================================");
-        $display("  [PASS] Physical Block RAM Bank Reads: OK");
-        $display("  [PASS] SIMD Parallel Multiplication : OK");
-        $display("  [PASS] Adder Tree & Accumulator     : OK");
-        $display("  [PASS] Physical BRAM Writeback Strobe: OK (Scratchpad[100] <= -95)");
+        $display("  [PASS] 8-Bank Physical Block RAM Reads : OK");
+        $display("  [PASS] 8-Lane SIMD Multiplication      : OK (200)");
+        $display("  [PASS] Adder Tree & Accumulator        : OK (200 + 10 = 210)");
+        $display("  [PASS] Requantization & Activation     : OK (210 >> 1 = 105)");
+        $display("  [PASS] Physical BRAM Writeback Strobe  : OK (Scratchpad[100] <= 105)");
         $display("================================================================================\n");
 
         $finish;

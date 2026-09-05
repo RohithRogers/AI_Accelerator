@@ -13,9 +13,7 @@ module bias_adder #(
     output logic signed [ACC_WIDTH-1:0] sum_out  // Biased sum output
 );
 
-    always_comb begin
-        // Sign-extend 8-bit bias to 32 bits and add to the accumulated sum
-        sum_out = acc_in + $signed({{24{bias_in[7]}}, bias_in});
-    end
+    // Sign-extend 8-bit bias to 32 bits and add to the accumulated sum
+    assign sum_out = acc_in + {{(ACC_WIDTH-8){bias_in[7]}}, bias_in};
 
 endmodule

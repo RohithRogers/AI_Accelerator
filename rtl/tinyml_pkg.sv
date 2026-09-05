@@ -64,30 +64,36 @@ package tinyml_pkg;
     logic        decode_error; // 1 = illegal opcode, reserved bits, bad activation, etc.
     opcode_t     opcode;       // 8-bit opcode enum
     logic [7:0]  flags;        // header [23:16] — reserved for future extensions
-    activation_t activation;   // header [15:8]  — activation type for ACT/DENSE
+    activation_t activation;   // header [15:8]  — activation type for ACT/DENSE/CONV
+    logic signed [7:0] shift;  // header [7:0]   — signed shift amount n for DENSE/CONV
 
     // LOAD / STORE operands
     logic [15:0] mem_addr;     // LOAD: source host-mem address; STORE: destination
     logic [15:0] sp_addr;      // LOAD: dest scratchpad address; STORE: source
 
-    // DENSE operands
+    // DENSE / CONV operands
     logic [15:0] input_addr;
     logic [15:0] weight_addr;
     logic [15:0] output_addr;
     logic [15:0] bias_addr;
-    logic [15:0] input_len;
-    logic [15:0] output_len;
+    logic [15:0] input_len;     // DENSE input length
+    logic [15:0] output_len;    // DENSE output length
+    logic [15:0] out_h;         // CONV output height
+    logic [15:0] out_w;         // CONV output width
+    logic [31:0] m0;            // DENSE/CONV 32-bit requant multiplier M0
 
     // ACT / shared length operand
     logic [15:0] length;       // LOAD/STORE: byte count; ACT: element count
 
     // CONV_CFG operands (convolution geometry)
-    logic [7:0]  img_width;    // input feature map width
-    logic [7:0]  img_height;   // input feature map height
-    logic [7:0]  channels;     // number of input channels
-    logic [3:0]  kernel_size;  // square kernel dimension (e.g. 3 for 3x3)
-    logic [3:0]  stride;       // convolution stride
-    logic [3:0]  padding;      // zero-padding amount
+    logic [15:0] in_channels;  // number of input channels
+    logic [15:0] out_channels; // number of output channels
+    logic [15:0] h_in;         // input feature map height
+    logic [15:0] w_in;         // input feature map width
+    logic [15:0] kh;           // kernel height
+    logic [15:0] kw;           // kernel width
+    logic [15:0] stride;       // convolution stride
+    logic [15:0] pad;          // zero-padding amount
 
     // fetch-side bookkeeping (filled by instruction_fetch, forwarded through decoder)
     logic [15:0] next_pc;      // PC value after this instruction's words

@@ -4,3 +4,16 @@ sw/compiler/__pycache__
 a.exe
 /sim_*
 /test.cpp
+/test_workflow
+*vcd
+*log
+*err
+/rtl/experimental
+/flow/*.hex
+/flow/*.md
+/*.out
+vis.html
+/sw/compiler/test_dense*
+/sw/compiler/test_mat*
+/sw/compiler/test_two*
+/temp

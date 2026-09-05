@@ -24,14 +24,16 @@ module dense_engine #(
     input  logic [15:0] input_len,
     input  logic [15:0] output_len,
     input  logic [7:0]  activation,
+    input  logic [31:0] requant_m0,
+    input  logic signed [7:0] requant_shift,
     
     output logic        busy,
     output logic        done,
     output logic        error,
     
     // Scratchpad Memory Read Interface
-    output logic [15:0] spad_rd_addr[SIMD_WIDTH],
-    input  logic signed [7:0] spad_rd_data[SIMD_WIDTH],
+    output logic [SIMD_WIDTH*16-1:0] spad_rd_addr_bus,
+    input  logic signed [SIMD_WIDTH*8-1:0] spad_rd_data_bus,
     
     // Scratchpad Memory Write Interface
     output logic        spad_wr_en,
@@ -39,8 +41,8 @@ module dense_engine #(
     output logic signed [7:0] spad_wr_data,
     
     // Weight RAM Interface
-    output logic [15:0] weight_rd_addr[SIMD_WIDTH],
-    input  logic signed [7:0] weight_rd_data[SIMD_WIDTH],
+    output logic [SIMD_WIDTH*16-1:0] weight_rd_addr_bus,
+    input  logic signed [SIMD_WIDTH*8-1:0] weight_rd_data_bus,
     
     // Bias RAM Interface
     output logic [15:0] bias_rd_addr,
@@ -65,16 +67,12 @@ module dense_engine #(
     // Loop Counters
     logic [15:0] out_idx;
     logic [15:0] cur_weight_base;
+    logic [15:0] chunk_offset;
 
     // Datapath Control Interconnects
-    logic        vloader_start;
-    logic        vloader_next_chunk;
-    logic        vloader_busy;
-    logic        vloader_chunk_valid;
     logic [SIMD_WIDTH-1:0] lanes_valid;
-    logic        vloader_last;
+    logic        last_chunk;
 
-    logic signed [15:0] products[SIMD_WIDTH];
     logic signed [ACC_WIDTH-1:0] adder_sum;
     
     logic        acc_clear;
@@ -89,43 +87,25 @@ module dense_engine #(
     logic [15:0] wb_addr;
     logic signed [7:0] wb_data;
 
-    // 1. Instantiate Vector Loader
-    vector_loader #(
-        .SIMD_WIDTH(SIMD_WIDTH)
-    ) u_vector_loader (
-        .clk(clk),
-        .rst_n(rst_n),
-        .start(vloader_start),
-        .next_chunk(vloader_next_chunk),
-        .base_sp_addr(input_addr),
-        .base_weight_addr(cur_weight_base),
-        .input_len(input_len),
-        .busy(vloader_busy),
-        .chunk_valid(vloader_chunk_valid),
-        .spad_rd_addr(spad_rd_addr),
-        .weight_rd_addr(weight_rd_addr),
-        .lanes_valid(lanes_valid),
-        .last_chunk(vloader_last)
-    );
+    // Address generation is kept local to avoid unresolved unpacked-array
+    // outputs across a nested hierarchy in Icarus Verilog.
+    generate
+        for (genvar lane = 0; lane < SIMD_WIDTH; lane++) begin : g_lane_addr
+            assign spad_rd_addr_bus[lane*16 +: 16]   = input_addr + chunk_offset + lane;
+            assign weight_rd_addr_bus[lane*16 +: 16] = cur_weight_base + chunk_offset + lane;
+            assign lanes_valid[lane]    = chunk_offset + lane < input_len;
+        end
+    endgenerate
+    assign last_chunk = chunk_offset + SIMD_WIDTH >= input_len;
 
-    // 2. Instantiate SIMD MAC Array
-    simd_mac_array #(
-        .SIMD_WIDTH(SIMD_WIDTH)
-    ) u_simd_mac (
-        .act_data(spad_rd_data),
-        .weight_data(weight_rd_data),
-        .lanes_valid(lanes_valid),
-        .products(products)
-    );
-
-    // 3. Instantiate Adder Tree
-    adder_tree #(
-        .SIMD_WIDTH(SIMD_WIDTH),
-        .ACC_WIDTH(ACC_WIDTH)
-    ) u_adder_tree (
-        .products(products),
-        .sum_out(adder_sum)
-    );
+    // Packed-bus SIMD MAC reduction.
+    always_comb begin
+        adder_sum = '0;
+        for (int lane = 0; lane < SIMD_WIDTH; lane++)
+            if (lanes_valid[lane])
+                adder_sum += $signed(spad_rd_data_bus[lane*8 +: 8]) *
+                             $signed(weight_rd_data_bus[lane*8 +: 8]);
+    end
 
     // 4. Instantiate Accumulator
     accumulator #(
@@ -149,11 +129,12 @@ module dense_engine #(
     );
 
     // 6. Instantiate Requantizer
-    requantizer #(
-        .ACC_WIDTH(ACC_WIDTH),
-        .REQUANT_SHIFT(REQUANT_SHIFT)
+    requantizer_runtime #(
+        .ACC_WIDTH(ACC_WIDTH)
     ) u_requantizer (
         .acc_in(biased_sum),
+        .m0(requant_m0),
+        .shift_n(requant_shift),
         .val_out(requant_out)
     );
 
@@ -184,11 +165,16 @@ module dense_engine #(
             state <= ST_IDLE;
             out_idx <= 16'd0;
             cur_weight_base <= 16'd0;
+            chunk_offset <= 16'd0;
         end else begin
             state <= next_state;
             if (state == ST_IDLE && start) begin
                 out_idx <= 16'd0;
                 cur_weight_base <= weight_addr;
+            end else if (state == ST_INIT_ACC) begin
+                chunk_offset <= 16'd0;
+            end else if (state == ST_MAC && !last_chunk) begin
+                chunk_offset <= chunk_offset + SIMD_WIDTH;
             end else if (state == ST_WRITE_RESULT) begin
                 out_idx <= out_idx + 1'b1;
                 cur_weight_base <= cur_weight_base + input_len;
@@ -202,8 +188,6 @@ module dense_engine #(
         busy               = 1'b1;
         done               = 1'b0;
         error              = 1'b0;
-        vloader_start      = 1'b0;
-        vloader_next_chunk = 1'b0;
         acc_clear          = 1'b0;
         acc_accumulate     = 1'b0;
         wb_enable          = 1'b0;
@@ -231,7 +215,6 @@ module dense_engine #(
 
             ST_INIT_ACC: begin
                 acc_clear     = 1'b1;
-                vloader_start = 1'b1;
                 next_state    = ST_LOAD_CHUNK;
             end
 
@@ -245,11 +228,10 @@ module dense_engine #(
 
             ST_MAC: begin
                 acc_accumulate = 1'b1;
-                if (vloader_last) begin
+                if (last_chunk) begin
                     next_state = ST_POSTPROCESS;
                 end else begin
                     next_state = ST_LOAD_CHUNK;
-                    vloader_next_chunk = 1'b1;
                 end
             end
 

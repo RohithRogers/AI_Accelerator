@@ -10,7 +10,7 @@ module adder_tree #(
     parameter int SIMD_WIDTH = 4,  // Number of elements to sum (W=4)
     parameter int ACC_WIDTH  = 32  // Wider width to prevent mathematical overflow
 ) (
-    input  logic signed [15:0]      products[SIMD_WIDTH], // Products from multipliers
+    input  logic signed [15:0]      products[0:SIMD_WIDTH-1], // Products from multipliers
     output logic signed [ACC_WIDTH-1:0] sum_out           // Final 32-bit signed sum
 );
 

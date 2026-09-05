@@ -1,0 +1,17 @@
+{
+  "num_layers": 2,
+  "input_len": 4,
+  "output_len": 2,
+  "input_vector": [1, -2, 3, 2],
+  "golden_output": [20, -10],
+  "intermediate_activations": [
+    [1, -2, 3, 2],
+    [1, 0, 7],
+    [20, -10]
+  ],
+  "num_instructions": 5,
+  "num_imem_words": 17,
+  "total_weights": 18,
+  "total_biases": 5
+}
+

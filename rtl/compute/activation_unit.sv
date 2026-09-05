@@ -17,7 +17,9 @@ module activation_unit #(
 
     // Precomputed Sigmoid LUT mapping data_in [-128, 127] -> y [0, 127]
     // Assumes input scale = 0.0625, output scale = 1/127
-    localparam logic signed [7:0] SIGMOID_LUT [256] = '{
+`ifdef TINYML_USE_ACTIVATION_LUTS
+    logic signed [7:0] SIGMOID_LUT [0:255];
+    initial SIGMOID_LUT = '{
       8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0,
       8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0,
       8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd0, 8'sd1, 8'sd1, 8'sd1, 8'sd1, 8'sd1, 8'sd1, 8'sd1, 8'sd1,
@@ -38,7 +40,8 @@ module activation_unit #(
 
     // Precomputed Tanh LUT mapping data_in [-128, 127] -> y [-128, 127]
     // Assumes input scale = 0.0625, output scale = 1/127
-    localparam logic signed [7:0] TANH_LUT [256] = '{
+    logic signed [7:0] TANH_LUT [0:255];
+    initial TANH_LUT = '{
       -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127,
       -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127,
       -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127, -8'sd127,
@@ -56,6 +59,41 @@ module activation_unit #(
       8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127,
       8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127, 8'sd127
     };
+
+`endif
+
+    // Icarus Verilog does not support aggregate assignment to unpacked ROM
+    // arrays.  Use compact, synthesizable piecewise-linear approximations by
+    // default; defining TINYML_USE_ACTIVATION_LUTS enables the exact tables on
+    // tools that support SystemVerilog aggregate ROM initialization.
+    function automatic logic signed [7:0] sigmoid_approx(
+        input logic signed [7:0] value
+    );
+        integer scaled;
+        begin
+            if (value <= -8'sd96)
+                sigmoid_approx = 8'sd0;
+            else if (value >= 8'sd96)
+                sigmoid_approx = 8'sd127;
+            else begin
+                scaled = (($signed(value) + 96) * 127) / 192;
+                sigmoid_approx = scaled[7:0];
+            end
+        end
+    endfunction
+
+    function automatic logic signed [7:0] tanh_approx(
+        input logic signed [7:0] value
+    );
+        begin
+            if (value <= -8'sd64)
+                tanh_approx = -8'sd127;
+            else if (value >= 8'sd64)
+                tanh_approx = 8'sd127;
+            else
+                tanh_approx = $signed(value) <<< 1;
+        end
+    endfunction
 
     logic [7:0] index;
     assign index = data_in + 8'd128; // Offset to map [-128, 127] to [0, 255]
@@ -81,16 +119,10 @@ module activation_unit #(
                     data_out = data_in;
             end
 
-            ACT_SIGMOID: begin
-                data_out = SIGMOID_LUT[index];
-            end
-
-            ACT_TANH: begin
-                data_out = TANH_LUT[index];
-            end
-            
             default: begin
-                data_out = data_in; // Default fallback
+                // SIGMOID/TANH are intentionally unsupported in this RTL
+                // revision; instruction_decoder rejects those encodings.
+                data_out = data_in;
             end
         endcase
     end

@@ -47,11 +47,12 @@ module instruction_fetch (
   input  logic [15:0] pc_in,
 
   // Assembled raw words — passed directly to instruction_decoder
-  // w0 is always the header; w1..w3 are operand words (zero when unused)
-  output logic [31:0] w0,               // header word (opcode + flags + activation + reserved)
+  // w0 is always the header; w1..w4 are operand words (zero when unused)
+  output logic [31:0] w0,               // header word (opcode + flags + activation + shift)
   output logic [31:0] w1,               // operand word 1
   output logic [31:0] w2,               // operand word 2
   output logic [31:0] w3,               // operand word 3
+  output logic [31:0] w4,               // operand word 4
 
   // Next PC — forwarded to controller_fsm for retirement
   output logic [15:0] next_pc,
@@ -64,6 +65,7 @@ module instruction_fetch (
 
   typedef enum logic [2:0] {
     ST_IDLE,
+    ST_WAIT_HDR_MEM,
     ST_WAIT_HDR,
     ST_WAIT_OP,
     ST_CAPTURE_OP
@@ -71,7 +73,7 @@ module instruction_fetch (
 
   state_t state;
   logic [15:0] total_words;
-  logic [1:0]  current_op_idx;
+  logic [2:0]  current_op_idx;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -82,11 +84,12 @@ module instruction_fetch (
       w1             <= 32'h0;
       w2             <= 32'h0;
       w3             <= 32'h0;
+      w4             <= 32'h0;
       next_pc        <= 16'h0;
       imem_rd_en     <= 1'b0;
       imem_rd_addr   <= 16'h0;
       total_words    <= 16'h0;
-      current_op_idx <= 2'd0;
+      current_op_idx <= 3'd0;
     end else begin
       instr_valid <= 1'b0; // Default pulse low
       imem_rd_en  <= 1'b0;
@@ -99,10 +102,15 @@ module instruction_fetch (
             w1           <= 32'h0;
             w2           <= 32'h0;
             w3           <= 32'h0;
+            w4           <= 32'h0;
             imem_rd_en   <= 1'b1;
             imem_rd_addr <= pc_in;
-            state        <= ST_WAIT_HDR;
+            state        <= ST_WAIT_HDR_MEM;
           end
+        end
+
+        ST_WAIT_HDR_MEM: begin
+          state <= ST_WAIT_HDR;
         end
 
         ST_WAIT_HDR: begin
@@ -112,7 +120,9 @@ module instruction_fetch (
             OP_NOP, OP_END  : total_words <= 16'd1;
             OP_ACT          : total_words <= 16'd2;
             OP_LOAD, OP_STORE: total_words <= 16'd3;
-            OP_DENSE        : total_words <= 16'd4;
+            OP_DENSE        : total_words <= 16'd5;
+            OP_CONV_CFG     : total_words <= 16'd5;
+            OP_CONV         : total_words <= 16'd5;
             default         : begin
               fetch_error <= 1'b1;
               state       <= ST_IDLE;
@@ -121,13 +131,16 @@ module instruction_fetch (
 
           if (imem_rd_data[31:24] == OP_NOP   || imem_rd_data[31:24] == OP_LOAD  ||
               imem_rd_data[31:24] == OP_STORE || imem_rd_data[31:24] == OP_DENSE ||
-              imem_rd_data[31:24] == OP_ACT   || imem_rd_data[31:24] == OP_END) begin
+              imem_rd_data[31:24] == OP_ACT   || imem_rd_data[31:24] == OP_END   ||
+              imem_rd_data[31:24] == OP_CONV_CFG || imem_rd_data[31:24] == OP_CONV) begin
             logic [15:0] calculated_words;
             case (imem_rd_data[31:24])
               OP_NOP, OP_END   : calculated_words = 16'd1;
               OP_ACT           : calculated_words = 16'd2;
               OP_LOAD, OP_STORE: calculated_words = 16'd3;
-              OP_DENSE         : calculated_words = 16'd4;
+              OP_DENSE         : calculated_words = 16'd5;
+              OP_CONV_CFG      : calculated_words = 16'd5;
+              OP_CONV          : calculated_words = 16'd5;
               default          : calculated_words = 16'd1;
             endcase
 
@@ -137,7 +150,7 @@ module instruction_fetch (
               instr_valid <= 1'b1;
               state       <= ST_IDLE;
             end else begin
-              current_op_idx <= 2'd1;
+              current_op_idx <= 3'd1;
               imem_rd_en     <= 1'b1;
               imem_rd_addr   <= pc_in + 16'd1;
               state          <= ST_WAIT_OP;
@@ -151,18 +164,20 @@ module instruction_fetch (
 
         ST_CAPTURE_OP: begin
           case (current_op_idx)
-            2'd1: w1 <= imem_rd_data;
-            2'd2: w2 <= imem_rd_data;
-            2'd3: w3 <= imem_rd_data;
+            3'd1: w1 <= imem_rd_data;
+            3'd2: w2 <= imem_rd_data;
+            3'd3: w3 <= imem_rd_data;
+            3'd4: w4 <= imem_rd_data;
+            default: ;
           endcase
 
-          if (current_op_idx + 1'b1 == total_words[1:0]) begin
+          if (current_op_idx + 1'b1 == total_words[2:0]) begin
             instr_valid <= 1'b1;
             state       <= ST_IDLE;
           end else begin
             current_op_idx <= current_op_idx + 1'b1;
             imem_rd_en     <= 1'b1;
-            imem_rd_addr   <= pc_in + {14'd0, current_op_idx + 1'b1};
+            imem_rd_addr   <= pc_in + {13'd0, current_op_idx + 1'b1};
             state          <= ST_WAIT_OP;
           end
         end

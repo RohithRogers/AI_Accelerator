@@ -19,7 +19,7 @@ module tb_instruction_decoder;
   logic [31:0] imem_wr_data;
 
   // Decoder ports
-  logic [31:0] w0, w1, w2, w3;
+  logic [31:0] w0, w1, w2, w3, w4;
   decoded_instr_t instr_out;
 
   // Instantiations
@@ -41,6 +41,7 @@ module tb_instruction_decoder;
     .w1(w1),
     .w2(w2),
     .w3(w3),
+    .w4(w4),
     .instr_out(instr_out)
   );
 
@@ -56,14 +57,14 @@ module tb_instruction_decoder;
     imem_wr_addr = 0;
     imem_wr_data = 0;
 
-    w0 = 0; w1 = 0; w2 = 0; w3 = 0;
+    w0 = 0; w1 = 0; w2 = 0; w3 = 0; w4 = 0;
 
     #20 rst_n = 1;
     #10;
 
     $display("=== TEST 1: NOP instruction decode ===");
     w0 = 32'h00000000;
-    w1 = 0; w2 = 0; w3 = 0;
+    w1 = 0; w2 = 0; w3 = 0; w4 = 0;
     #1;
     assert(instr_out.valid == 1'b1) else $error("NOP should be valid");
     assert(instr_out.opcode == OP_NOP) else $error("Opcode should be OP_NOP");
@@ -73,6 +74,7 @@ module tb_instruction_decoder;
     w1 = 32'h10000020;
     w2 = 32'h00400000;
     w3 = 32'h00000000;
+    w4 = 32'h00000000;
     #1;
     assert(instr_out.valid == 1'b1) else $error("LOAD should be valid");
     assert(instr_out.opcode == OP_LOAD) else $error("Opcode should be OP_LOAD");
@@ -88,6 +90,7 @@ module tb_instruction_decoder;
     w1 = 32'h00502000;
     w2 = 32'h00100000;
     w3 = 32'h00000000;
+    w4 = 32'h00000000;
     #1;
     assert(instr_out.valid == 1'b1) else $error("STORE should be valid");
     assert(instr_out.opcode == OP_STORE) else $error("Opcode should be OP_STORE");
@@ -96,20 +99,23 @@ module tb_instruction_decoder;
     assert(instr_out.length == 16'h0010) else $error("STORE length mismatch");
 
     $display("=== TEST 4: DENSE instruction decode ===");
-    w0 = 32'h03000100;
+    w0 = 32'h030001FF; // shift = -1 (8'hFF)
     w1 = 32'h00100100;
     w2 = 32'h00800008;
     w3 = 32'h00040008;
+    w4 = 32'h40000000; // m0
     #1;
     assert(instr_out.valid == 1'b1) else $error("DENSE should be valid");
     assert(instr_out.opcode == OP_DENSE) else $error("Opcode should be OP_DENSE");
     assert(instr_out.activation == ACT_RELU) else $error("activation mismatch");
+    assert(instr_out.shift == -8'sd1) else $error("shift mismatch");
     assert(instr_out.input_addr == 16'h0010) else $error("input_addr mismatch");
     assert(instr_out.weight_addr == 16'h0100) else $error("weight_addr mismatch");
     assert(instr_out.output_addr == 16'h0080) else $error("output_addr mismatch");
     assert(instr_out.bias_addr == 16'h0008) else $error("bias_addr mismatch");
     assert(instr_out.input_len == 16'h0004) else $error("input_len mismatch");
     assert(instr_out.output_len == 16'h0008) else $error("output_len mismatch");
+    assert(instr_out.m0 == 32'h40000000) else $error("m0 mismatch");
 
     $display("=== TEST 5: ACT instruction decode ===");
     // Header: OP_ACT (0x04), flags=0x00, act=RELU6 (0x02) -> 32'h04000200
@@ -118,6 +124,7 @@ module tb_instruction_decoder;
     w1 = 32'h00300010;
     w2 = 32'h00000000;
     w3 = 32'h00000000;
+    w4 = 32'h00000000;
     #1;
     assert(instr_out.valid == 1'b1) else $error("ACT should be valid");
     assert(instr_out.opcode == OP_ACT) else $error("Opcode should be OP_ACT");
@@ -127,11 +134,49 @@ module tb_instruction_decoder;
 
     $display("=== TEST 6: Decode Error (Illegal opcode) ===");
     w0 = 32'hFF000000;
+    w1 = 0; w2 = 0; w3 = 0; w4 = 0;
     #1;
     assert(instr_out.valid == 1'b0) else $error("Illegal opcode should fail valid");
     assert(instr_out.decode_error == 1'b1) else $error("Illegal opcode should raise decode_error");
 
-    $display("=== TEST 7: Instruction Memory Write and 1-Cycle Read ===");
+    $display("=== TEST 7: CONV_CFG instruction decode ===");
+    w0 = 32'h06000000;
+    w1 = 32'h00030008;
+    w2 = 32'h00080008;
+    w3 = 32'h00030003;
+    w4 = 32'h00010001;
+    #1;
+    assert(instr_out.valid == 1'b1) else $error("CONV_CFG should be valid");
+    assert(instr_out.opcode == OP_CONV_CFG) else $error("Opcode should be OP_CONV_CFG");
+    assert(instr_out.in_channels == 16'd3) else $error("in_channels mismatch");
+    assert(instr_out.out_channels == 16'd8) else $error("out_channels mismatch");
+    assert(instr_out.h_in == 16'd8) else $error("h_in mismatch");
+    assert(instr_out.w_in == 16'd8) else $error("w_in mismatch");
+    assert(instr_out.kh == 16'd3) else $error("kh mismatch");
+    assert(instr_out.kw == 16'd3) else $error("kw mismatch");
+    assert(instr_out.stride == 16'd1) else $error("stride mismatch");
+    assert(instr_out.pad == 16'd1) else $error("pad mismatch");
+
+    $display("=== TEST 8: CONV instruction decode ===");
+    w0 = 32'h070001FE; // shift = -2 (8'hFE)
+    w1 = 32'h00002000;
+    w2 = 32'h40003000;
+    w3 = 32'h00080008;
+    w4 = 32'h50000000;
+    #1;
+    assert(instr_out.valid == 1'b1) else $error("CONV should be valid");
+    assert(instr_out.opcode == OP_CONV) else $error("Opcode should be OP_CONV");
+    assert(instr_out.activation == ACT_RELU) else $error("activation mismatch");
+    assert(instr_out.shift == -8'sd2) else $error("shift mismatch");
+    assert(instr_out.input_addr == 16'h0000) else $error("input_addr mismatch");
+    assert(instr_out.weight_addr == 16'h2000) else $error("weight_addr mismatch");
+    assert(instr_out.output_addr == 16'h4000) else $error("output_addr mismatch");
+    assert(instr_out.bias_addr == 16'h3000) else $error("bias_addr mismatch");
+    assert(instr_out.out_h == 16'd8) else $error("out_h mismatch");
+    assert(instr_out.out_w == 16'd8) else $error("out_w mismatch");
+    assert(instr_out.m0 == 32'h50000000) else $error("m0 mismatch");
+
+    $display("=== TEST 9: Instruction Memory Write and 1-Cycle Read ===");
     @(posedge clk);
     imem_wr_en = 1;
     imem_wr_addr = 10'd5;

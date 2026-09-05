@@ -19,7 +19,7 @@ module tb_instruction_fetch;
   logic        fetch_start;
   logic        instr_valid;
   logic        fetch_error;
-  logic [31:0] w0, w1, w2, w3;
+  logic [31:0] w0, w1, w2, w3, w4;
   logic [15:0] next_pc;
 
   // Instruction memory signals
@@ -58,7 +58,7 @@ module tb_instruction_fetch;
     .instr_valid(instr_valid),
     .fetch_error(fetch_error),
     .pc_in(pc_out),
-    .w0(w0), .w1(w1), .w2(w2), .w3(w3),
+    .w0(w0), .w1(w1), .w2(w2), .w3(w3), .w4(w4),
     .next_pc(next_pc),
     .imem_rd_en(imem_rd_en),
     .imem_rd_addr(imem_rd_addr),
@@ -66,7 +66,7 @@ module tb_instruction_fetch;
   );
 
   instruction_decoder u_decoder (
-    .w0(w0), .w1(w1), .w2(w2), .w3(w3),
+    .w0(w0), .w1(w1), .w2(w2), .w3(w3), .w4(w4),
     .instr_out(instr_out)
   );
 
@@ -88,19 +88,45 @@ module tb_instruction_fetch;
     @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd1; imem_wr_data = 32'h01000010;
     @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd2; imem_wr_data = 32'h00200000;
 
-    // Word 3..6: DENSE instruction (4 words)
-    // W0: OP_DENSE (0x03), flags=0x00, act=RELU (0x01) -> 32'h03000100
+    // Word 3..7: DENSE instruction (5 words)
+    // W0: OP_DENSE (0x03), flags=0x00, act=RELU (0x01), shift=-2 (8'hFE) -> 32'h030001FE
     // W1: input_addr=0x0010, weight_addr=0x0080 -> 32'h00100080
     // W2: output_addr=0x0040, bias_addr=0x0004 -> 32'h00400004
     // W3: input_len=0x0008, output_len=0x0004 -> 32'h00080004
-    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd3; imem_wr_data = 32'h03000100;
+    // W4: m0=32'h60000000 -> 32'h60000000
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd3; imem_wr_data = 32'h030001FE;
     @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd4; imem_wr_data = 32'h00100080;
     @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd5; imem_wr_data = 32'h00400004;
     @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd6; imem_wr_data = 32'h00080004;
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd7; imem_wr_data = 32'h60000000;
 
-    // Word 7: END instruction (1 word)
+    // Word 8..12: CONV_CFG instruction (5 words)
+    // W0: OP_CONV_CFG (0x06), flags=0x00, act=NONE -> 32'h06000000
+    // W1: in_channels=3, out_channels=8 -> 32'h00030008
+    // W2: h_in=8, w_in=8 -> 32'h00080008
+    // W3: kh=3, kw=3 -> 32'h00030003
+    // W4: stride=1, pad=1 -> 32'h00010001
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd8; imem_wr_data = 32'h06000000;
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd9; imem_wr_data = 32'h00030008;
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd10; imem_wr_data = 32'h00080008;
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd11; imem_wr_data = 32'h00030003;
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd12; imem_wr_data = 32'h00010001;
+
+    // Word 13..17: CONV instruction (5 words)
+    // W0: OP_CONV (0x07), flags=0x00, act=RELU (0x01), shift=-1 (8'hFF) -> 32'h070001FF
+    // W1: input_addr=0x0000, weight_addr=0x2000 -> 32'h00002000
+    // W2: output_addr=0x4000, bias_addr=0x3000 -> 32'h40003000
+    // W3: out_h=8, out_w=8 -> 32'h00080008
+    // W4: m0=32'h70000000 -> 32'h70000000
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd13; imem_wr_data = 32'h070001FF;
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd14; imem_wr_data = 32'h00002000;
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd15; imem_wr_data = 32'h40003000;
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd16; imem_wr_data = 32'h00080008;
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd17; imem_wr_data = 32'h70000000;
+
+    // Word 18: END instruction (1 word)
     // W0: OP_END (0x05) -> 32'h05000000
-    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd7; imem_wr_data = 32'h05000000;
+    @(posedge clk); imem_wr_en = 1; imem_wr_addr = 10'd18; imem_wr_data = 32'h05000000;
     @(posedge clk); imem_wr_en = 0;
 
     #20;
@@ -135,31 +161,86 @@ module tb_instruction_fetch;
     #1;
     assert(instr_out.opcode == OP_DENSE) else $error("Fetched instruction should be OP_DENSE");
     assert(instr_out.activation == ACT_RELU) else $error("activation mismatch");
+    assert(instr_out.shift == -8'sd2) else $error("shift mismatch");
     assert(instr_out.input_addr == 16'h0010) else $error("input_addr mismatch");
     assert(instr_out.weight_addr == 16'h0080) else $error("weight_addr mismatch");
     assert(instr_out.output_addr == 16'h0040) else $error("output_addr mismatch");
     assert(instr_out.bias_addr == 16'h0004) else $error("bias_addr mismatch");
     assert(instr_out.input_len == 16'h0008) else $error("input_len mismatch");
     assert(instr_out.output_len == 16'h0004) else $error("output_len mismatch");
-    assert(next_pc == 16'd7) else $error("next_pc should be 7 for 4-word DENSE");
+    assert(instr_out.m0 == 32'h60000000) else $error("m0 mismatch");
+    assert(next_pc == 16'd8) else $error("next_pc should be 8 for 5-word DENSE");
 
-    $display("=== Retiring DENSE Instruction (Advance PC to 7) ===");
+    $display("=== Retiring DENSE Instruction (Advance PC to 8) ===");
     @(posedge clk);
     pc_write = 1;
     pc_next = next_pc;
     @(posedge clk);
     pc_write = 0;
     #1;
-    assert(pc_out == 16'd7) else $error("PC should be advanced to 7");
+    assert(pc_out == 16'd8) else $error("PC should be advanced to 8");
 
-    $display("=== TEST 3: Fetch END Instruction at PC=7 ===");
+    $display("=== TEST 3: Fetch CONV_CFG Instruction at PC=8 ===");
+    @(posedge clk); fetch_start = 1;
+    @(posedge clk); fetch_start = 0;
+
+    @(posedge instr_valid);
+    #1;
+    assert(instr_out.opcode == OP_CONV_CFG) else $error("Fetched instruction should be OP_CONV_CFG");
+    assert(instr_out.in_channels == 16'd3) else $error("in_channels mismatch");
+    assert(instr_out.out_channels == 16'd8) else $error("out_channels mismatch");
+    assert(instr_out.h_in == 16'd8) else $error("h_in mismatch");
+    assert(instr_out.w_in == 16'd8) else $error("w_in mismatch");
+    assert(instr_out.kh == 16'd3) else $error("kh mismatch");
+    assert(instr_out.kw == 16'd3) else $error("kw mismatch");
+    assert(instr_out.stride == 16'd1) else $error("stride mismatch");
+    assert(instr_out.pad == 16'd1) else $error("pad mismatch");
+    assert(next_pc == 16'd13) else $error("next_pc should be 13 for 5-word CONV_CFG");
+
+    $display("=== Retiring CONV_CFG Instruction (Advance PC to 13) ===");
+    @(posedge clk);
+    pc_write = 1;
+    pc_next = next_pc;
+    @(posedge clk);
+    pc_write = 0;
+    #1;
+    assert(pc_out == 16'd13) else $error("PC should be advanced to 13");
+
+    $display("=== TEST 4: Fetch CONV Instruction at PC=13 ===");
+    @(posedge clk); fetch_start = 1;
+    @(posedge clk); fetch_start = 0;
+
+    @(posedge instr_valid);
+    #1;
+    assert(instr_out.opcode == OP_CONV) else $error("Fetched instruction should be OP_CONV");
+    assert(instr_out.activation == ACT_RELU) else $error("activation mismatch");
+    assert(instr_out.shift == -8'sd1) else $error("shift mismatch");
+    assert(instr_out.input_addr == 16'h0000) else $error("input_addr mismatch");
+    assert(instr_out.weight_addr == 16'h2000) else $error("weight_addr mismatch");
+    assert(instr_out.output_addr == 16'h4000) else $error("output_addr mismatch");
+    assert(instr_out.bias_addr == 16'h3000) else $error("bias_addr mismatch");
+    assert(instr_out.out_h == 16'd8) else $error("out_h mismatch");
+    assert(instr_out.out_w == 16'd8) else $error("out_w mismatch");
+    assert(instr_out.m0 == 32'h70000000) else $error("m0 mismatch");
+    assert(next_pc == 16'd18) else $error("next_pc should be 18 for 5-word CONV");
+
+    $display("=== Retiring CONV Instruction (Advance PC to 18) ===");
+    @(posedge clk);
+    pc_write = 1;
+    pc_next = next_pc;
+    @(posedge clk);
+    pc_write = 0;
+    #1;
+    assert(pc_out == 16'd18) else $error("PC should be advanced to 18");
+
+    $display("=== TEST 5: Fetch END Instruction at PC=18 ===");
     @(posedge clk); fetch_start = 1;
     @(posedge clk); fetch_start = 0;
 
     @(posedge instr_valid);
     #1;
     assert(instr_out.opcode == OP_END) else $error("Fetched instruction should be OP_END");
-    assert(next_pc == 16'd8) else $error("next_pc should be 8 for 1-word END");
+    assert(next_pc == 16'd19) else $error("next_pc should be 19 for 1-word END");
 
     $display("=== ALL FETCH & PC TESTS PASSED ===");
     $finish;

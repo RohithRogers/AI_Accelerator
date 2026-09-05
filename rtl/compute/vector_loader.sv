@@ -24,8 +24,8 @@ module vector_loader #(
     output logic        chunk_valid,      // High when output addresses are stable
     
     // Generated Address Buses
-    output logic [15:0] spad_rd_addr    [SIMD_WIDTH], // Scratchpad read addresses
-    output logic [15:0] weight_rd_addr[SIMD_WIDTH], // Weight RAM read addresses
+    output logic [15:0] spad_rd_addr    [0:SIMD_WIDTH-1], // Scratchpad read addresses
+    output logic [15:0] weight_rd_addr[0:SIMD_WIDTH-1], // Weight RAM read addresses
     
     // Parallel Lane Mask Outputs
     output logic [SIMD_WIDTH-1:0] lanes_valid, // Tells MAC which lanes contain valid numbers
@@ -61,18 +61,14 @@ module vector_loader #(
         end
     end
 
-    // Combinational generation of addresses and masks
-    always_comb begin
-        for (int i = 0; i < SIMD_WIDTH; i++) begin
-            // Generate sequential address offsets
-            spad_rd_addr[i]     = base_sp_addr + chunk_offset + i;
-            weight_rd_addr[i] = base_weight_addr + chunk_offset + i;
-            
-            // Mask out lanes that go beyond the target vector length (tail masking)
-            lanes_valid[i]    = (busy && (chunk_offset + i < input_len)) ? 1'b1 : 1'b0;
+    // Continuous per-lane drivers
+    generate
+        for (genvar lane = 0; lane < SIMD_WIDTH; lane++) begin : g_lane_addr
+            assign spad_rd_addr[lane]   = base_sp_addr + chunk_offset + lane;
+            assign weight_rd_addr[lane] = base_weight_addr + chunk_offset + lane;
+            assign lanes_valid[lane]    = busy && (chunk_offset + lane < input_len);
         end
-        // Signal that this is the final group of elements
-        last_chunk = (chunk_offset + SIMD_WIDTH >= input_len);
-    end
+    endgenerate
+    assign last_chunk = (chunk_offset + SIMD_WIDTH >= input_len);
 
 endmodule

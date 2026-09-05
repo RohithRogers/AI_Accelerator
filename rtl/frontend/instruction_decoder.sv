@@ -44,6 +44,7 @@ module instruction_decoder (
   input  logic [31:0] w1,               // operand word 1 (zero if unused)
   input  logic [31:0] w2,               // operand word 2 (zero if unused)
   input  logic [31:0] w3,               // operand word 3 (zero if unused)
+  input  logic [31:0] w4,               // operand word 4 (zero if unused)
 
   // Decoded instruction struct output (fully combinational, type from tinyml_pkg)
   output decoded_instr_t instr_out
@@ -63,13 +64,15 @@ module instruction_decoder (
   // ---------------------------------------------------------------------------
   always @* begin
     case (w0[31:24])
-      OP_NOP   : instr_type = OP_NOP;
-      OP_LOAD  : instr_type = OP_LOAD;
-      OP_STORE : instr_type = OP_STORE;
-      OP_DENSE : instr_type = OP_DENSE;
-      OP_ACT   : instr_type = OP_ACT;
-      OP_END   : instr_type = OP_END;
-      default  : instr_type = OP_NOP;   // unknown — error will be flagged below
+      OP_NOP      : instr_type = OP_NOP;
+      OP_LOAD     : instr_type = OP_LOAD;
+      OP_STORE    : instr_type = OP_STORE;
+      OP_DENSE    : instr_type = OP_DENSE;
+      OP_ACT      : instr_type = OP_ACT;
+      OP_END      : instr_type = OP_END;
+      OP_CONV_CFG : instr_type = OP_CONV_CFG;
+      OP_CONV     : instr_type = OP_CONV;
+      default     : instr_type = OP_NOP;   // unknown — error will be flagged below
     endcase
   end
 
@@ -78,43 +81,46 @@ module instruction_decoder (
   //
   //    Reserved-field checks per ISA (only fields the spec calls reserved):
   //      Header  : flags (w0[23:16]) must be 0x00
-  //                reserved byte (w0[7:0]) must be 0x00
+  //                shift (w0[7:0]) must be 0x00 for NOP, LOAD, STORE, ACT, END.
   //      LOAD    : w2[15:0] must be 0  (spec: W2={length[31:16], reserved[15:0]})
   //      STORE   : w2[15:0] must be 0  (same layout as LOAD)
   //      DENSE   : no reserved halves in W1–W3; all fields are operands
   //      ACT     : no reserved halves in W1; both halves are addr/length
-  //      NOP/END : w1, w2, w3 must all be zero
+  //      NOP/END : w1, w2, w3, w4 must all be zero
   // ---------------------------------------------------------------------------
   assign instr_decoder_error =
     // Unknown opcode
     !(w0[31:24] == OP_NOP   || w0[31:24] == OP_LOAD  ||
       w0[31:24] == OP_STORE || w0[31:24] == OP_DENSE ||
-      w0[31:24] == OP_ACT   || w0[31:24] == OP_END) ||
+      w0[31:24] == OP_ACT   || w0[31:24] == OP_END   ||
+      w0[31:24] == OP_CONV_CFG || w0[31:24] == OP_CONV) ||
     // Header reserved fields
     (w0[23:16] != 8'h00) ||
-    (w0[7:0]   != 8'h00) ||
+    (instr_type != OP_DENSE && instr_type != OP_CONV && w0[7:0] != 8'h00) ||
     // Invalid activation encoding
-    !(w0[15:8] == ACT_NONE || w0[15:8] == ACT_RELU || w0[15:8] == ACT_RELU6) ||
-    // LOAD/STORE: w2 lower half must be zero, w3 must be zero
-    (instr_type == OP_LOAD  && (w2[15:0] != 16'h0000 || w3 != 32'h0)) ||
-    (instr_type == OP_STORE && (w2[15:0] != 16'h0000 || w3 != 32'h0)) ||
-    // ACT: w2 and w3 must be zero
-    (instr_type == OP_ACT   && (w2 != 32'h0 || w3 != 32'h0)) ||
+    !(w0[15:8] == ACT_NONE || w0[15:8] == ACT_RELU || w0[15:8] == ACT_RELU6 ||
+      w0[15:8] == ACT_SIGMOID || w0[15:8] == ACT_TANH) ||
+    // LOAD/STORE: w2 lower half must be zero, w3 and w4 must be zero
+    (instr_type == OP_LOAD  && (w2[15:0] != 16'h0000 || w3 != 32'h0 || w4 != 32'h0)) ||
+    (instr_type == OP_STORE && (w2[15:0] != 16'h0000 || w3 != 32'h0 || w4 != 32'h0)) ||
+    // ACT: w2, w3, w4 must be zero
+    (instr_type == OP_ACT   && (w2 != 32'h0 || w3 != 32'h0 || w4 != 32'h0)) ||
     // NOP: no operand words expected
-    (instr_type == OP_NOP   && (w1 != 32'h0 || w2 != 32'h0 || w3 != 32'h0)) ||
+    (instr_type == OP_NOP   && (w1 != 32'h0 || w2 != 32'h0 || w3 != 32'h0 || w4 != 32'h0)) ||
     // END: no operand words expected
-    (instr_type == OP_END   && (w1 != 32'h0 || w2 != 32'h0 || w3 != 32'h0));
+    (instr_type == OP_END   && (w1 != 32'h0 || w2 != 32'h0 || w3 != 32'h0 || w4 != 32'h0));
 
   // ---------------------------------------------------------------------------
   // 3. Output struct field assignments
   //
   //    Fields in decoded_instr_t (from tinyml_pkg):
-  //      valid, decode_error, opcode, flags, activation,
-  //      mem_addr, sp_addr,                        (LOAD/STORE/ACT)
-  //      input_addr, weight_addr, output_addr,     (DENSE)
-  //      bias_addr, input_len, output_len,         (DENSE)
-  //      length,                                   (LOAD/STORE byte count; ACT element count)
-  //      next_pc                                   (filled by instruction_fetch; zero here)
+  //      valid, decode_error, opcode, flags, activation, shift,
+  //      mem_addr, sp_addr,
+  //      input_addr, weight_addr, output_addr, bias_addr,
+  //      input_len, output_len, out_h, out_w, m0,
+  //      length,
+  //      in_channels, out_channels, h_in, w_in, kh, kw, stride, pad,
+  //      next_pc
   // ---------------------------------------------------------------------------
 
   // Handshake fields
@@ -125,11 +131,9 @@ module instruction_decoder (
   assign instr_out.opcode       = opcode_t'(w0[31:24]);
   assign instr_out.flags        = w0[23:16];
   assign instr_out.activation   = activation_t'(w0[15:8]);
+  assign instr_out.shift        = (instr_type == OP_DENSE || instr_type == OP_CONV) ? w0[7:0] : 8'h00;
 
   // LOAD / STORE / ACT operands
-  // LOAD  W1: {mem_addr[31:16], sp_addr[15:0]}
-  // STORE W1: {sp_addr[31:16],  mem_addr[15:0]}
-  // ACT   W1: {sp_addr[31:16],  length[15:0]}
   assign instr_out.mem_addr     = (instr_type == OP_LOAD)  ? w1[31:16] :
                                   (instr_type == OP_STORE) ? w1[15:0]  : 16'h0000;
   assign instr_out.sp_addr      = (instr_type == OP_LOAD)  ? w1[15:0]  :
@@ -140,13 +144,26 @@ module instruction_decoder (
                                   (instr_type == OP_ACT)                              ? w1[15:0]  :
                                                                                         16'h0000;
 
-  // DENSE operands
-  assign instr_out.input_addr   = (instr_type == OP_DENSE) ? w1[31:16] : 16'h0000;
-  assign instr_out.weight_addr  = (instr_type == OP_DENSE) ? w1[15:0]  : 16'h0000;
-  assign instr_out.output_addr  = (instr_type == OP_DENSE) ? w2[31:16] : 16'h0000;
-  assign instr_out.bias_addr    = (instr_type == OP_DENSE) ? w2[15:0]  : 16'h0000;
+  // DENSE / CONV operands
+  assign instr_out.input_addr   = (instr_type == OP_DENSE || instr_type == OP_CONV) ? w1[31:16] : 16'h0000;
+  assign instr_out.weight_addr  = (instr_type == OP_DENSE || instr_type == OP_CONV) ? w1[15:0]  : 16'h0000;
+  assign instr_out.output_addr  = (instr_type == OP_DENSE || instr_type == OP_CONV) ? w2[31:16] : 16'h0000;
+  assign instr_out.bias_addr    = (instr_type == OP_DENSE || instr_type == OP_CONV) ? w2[15:0]  : 16'h0000;
   assign instr_out.input_len    = (instr_type == OP_DENSE) ? w3[31:16] : 16'h0000;
   assign instr_out.output_len   = (instr_type == OP_DENSE) ? w3[15:0]  : 16'h0000;
+  assign instr_out.out_h        = (instr_type == OP_CONV)  ? w3[31:16] : 16'h0000;
+  assign instr_out.out_w        = (instr_type == OP_CONV)  ? w3[15:0]  : 16'h0000;
+  assign instr_out.m0           = (instr_type == OP_DENSE || instr_type == OP_CONV) ? w4 : 32'h0;
+
+  // CONV_CFG operands
+  assign instr_out.in_channels  = (instr_type == OP_CONV_CFG) ? w1[31:16] : 16'h0000;
+  assign instr_out.out_channels = (instr_type == OP_CONV_CFG) ? w1[15:0]  : 16'h0000;
+  assign instr_out.h_in         = (instr_type == OP_CONV_CFG) ? w2[31:16] : 16'h0000;
+  assign instr_out.w_in         = (instr_type == OP_CONV_CFG) ? w2[15:0]  : 16'h0000;
+  assign instr_out.kh           = (instr_type == OP_CONV_CFG) ? w3[31:16] : 16'h0000;
+  assign instr_out.kw           = (instr_type == OP_CONV_CFG) ? w3[15:0]  : 16'h0000;
+  assign instr_out.stride       = (instr_type == OP_CONV_CFG) ? w4[31:16] : 16'h0000;
+  assign instr_out.pad          = (instr_type == OP_CONV_CFG) ? w4[15:0]  : 16'h0000;
 
   // next_pc: this decoder does not compute it; instruction_fetch fills it.
   // Drive zero so the struct is fully assigned (avoids X propagation in sim).

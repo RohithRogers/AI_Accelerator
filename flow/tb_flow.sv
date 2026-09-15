@@ -53,6 +53,42 @@ module tb_flow;
   integer input_count  = 0;
   integer output_count = 0;
 
+  integer trace_cycle = 0;
+  integer trace_start_cycle = 0;
+  integer trace_instruction_active = 0;
+  integer trace_instruction_id = 0;
+  logic [7:0] trace_opcode;
+
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      trace_cycle = 0;
+      trace_start_cycle = 0;
+      trace_instruction_active = 0;
+      trace_instruction_id = 0;
+      trace_opcode = 8'h00;
+    end else if (start && !trace_instruction_active && trace_cycle == 0) begin
+      trace_cycle = 0;
+    end else begin
+      trace_cycle = trace_cycle + 1;
+
+      if (dut.u_controller.current_state == 4'd1 && dut.u_controller.fetch_start) begin
+        trace_start_cycle = trace_cycle;
+        trace_instruction_active = 1;
+        trace_opcode = imem_buffer[dut.u_controller.pc_out][31:24];
+        trace_instruction_id = trace_instruction_id + 1;
+      end
+
+      if (trace_instruction_active &&
+          (dut.u_controller.current_state == 4'd10 ||
+           (dut.u_controller.current_state == 4'd11 && trace_opcode == 8'h05))) begin
+        $display("[TRACE] instruction=%0d opcode=0x%02x cycles=%0d",
+                 trace_instruction_id, trace_opcode,
+                 trace_cycle - trace_start_cycle + 1);
+        trace_instruction_active = 0;
+      end
+    end
+  end
+
   // Clock generation (100 MHz)
   always #5 clk = ~clk;
 
@@ -238,13 +274,15 @@ module tb_flow;
     start = 1'b0;
 
     cycles = 0;
-    while (!done && !error && cycles < 1000) begin
+    // A 16->32->16->6 network takes more than the legacy 4->3->2 demo.
+    // Keep a generous bound so a genuine deadlock is still reported.
+    while (!done && !error && cycles < 10000) begin
       @(posedge clk);
       cycles++;
     end
 
-    if (cycles >= 1000) begin
-      $error("[FLOW] TIMEOUT: Execution did not complete within 1000 cycles!");
+    if (cycles >= 10000) begin
+      $error("[FLOW] TIMEOUT: Execution did not complete within 10000 cycles!");
       fail_count++;
     end else if (error) begin
       $error("[FLOW] ERROR: Accelerator reported failure with error_code=0x%02x", error_code);

@@ -120,9 +120,12 @@ def run_golden_simulation(flow_dir=SCRIPT_DIR):
     print(f"Loaded {len(weights_all)} total weight bytes and {len(biases_all)} bias bytes.")
     print("----------------------------------------------------------------")
 
-    # 2. Simulate layer by layer
-    from flow.generate_network import build_custom_mlp
-    layers_def, _ = build_custom_mlp()
+    # 2. Simulate layer by layer.  Trained exports are self-describing;
+    # retain the dummy-model fallback for existing legacy images.
+    layers_def = config.get("layers")
+    if layers_def is None:
+        from flow.generate_network import build_custom_mlp
+        layers_def, _ = build_custom_mlp()
 
     cur_act = input_vec
     w_ptr = 0
@@ -146,7 +149,7 @@ def run_golden_simulation(flow_dir=SCRIPT_DIR):
 
         out_act, accs, reqs = simulate_dense_layer(cur_act, w_layer, b_layer, act, m0, shift)
 
-        print(f"Layer {i+1} [{l['name']}]: {in_dim} -> {out_dim} (Activation: {act})")
+        print(f"Layer {i+1} [{l.get('name', f'layer_{i+1}')}]: {in_dim} -> {out_dim} (Activation: {act})")
         print(f"  Input        : {cur_act.tolist()}")
         print(f"  Raw Accum    : {accs}")
         print(f"  Requantized  : {reqs}")

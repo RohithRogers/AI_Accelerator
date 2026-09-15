@@ -18,8 +18,12 @@ module requantizer_runtime #(parameter int ACC_WIDTH = 32) (
       total_sh = 31 + int'(sh);
       if (m == 0)
         do_scale = 64'sd0;
-      else if (total_sh >= 0)
-        do_scale = prod >>> total_sh;
+      // Match the compiler/golden model: add half an LSB before the
+      // arithmetic shift (including for negative values).
+      else if (total_sh > 0)
+        do_scale = (prod + (64'sd1 <<< (total_sh - 1))) >>> total_sh;
+      else if (total_sh == 0)
+        do_scale = prod;
       else
         do_scale = prod <<< (-total_sh);
     end

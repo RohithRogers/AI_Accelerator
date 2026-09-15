@@ -1,17 +1,179 @@
 {
-  "num_layers": 2,
-  "input_len": 4,
-  "output_len": 2,
-  "input_vector": [1, -2, 3, 2],
-  "golden_output": [20, -10],
-  "intermediate_activations": [
-    [1, -2, 3, 2],
-    [1, 0, 7],
-    [20, -10]
+  "model": "HAR_MLP_16x32x16x6",
+  "num_layers": 3,
+  "input_len": 16,
+  "output_len": 6,
+  "input_vector": [
+    -14,
+    3,
+    1,
+    4,
+    23,
+    4,
+    0,
+    3,
+    0,
+    4,
+    -1,
+    5,
+    4,
+    3,
+    1,
+    4
   ],
-  "num_instructions": 5,
-  "num_imem_words": 17,
-  "total_weights": 18,
-  "total_biases": 5
+  "golden_output": [
+    27,
+    22,
+    5,
+    -8,
+    -10,
+    -12
+  ],
+  "intermediate_activations": [
+    [
+      -14,
+      3,
+      1,
+      4,
+      23,
+      4,
+      0,
+      3,
+      0,
+      4,
+      -1,
+      5,
+      4,
+      3,
+      1,
+      4
+    ],
+    [
+      0,
+      0,
+      1,
+      0,
+      13,
+      0,
+      0,
+      9,
+      0,
+      19,
+      12,
+      8,
+      0,
+      18,
+      0,
+      26,
+      0,
+      0,
+      15,
+      19,
+      13,
+      0,
+      12,
+      16,
+      4,
+      0,
+      0,
+      0,
+      0,
+      22,
+      9,
+      25
+    ],
+    [
+      0,
+      0,
+      10,
+      16,
+      0,
+      9,
+      0,
+      2,
+      0,
+      0,
+      6,
+      0,
+      22,
+      18,
+      0,
+      24
+    ],
+    [
+      27,
+      22,
+      5,
+      -8,
+      -10,
+      -12
+    ]
+  ],
+  "num_instructions": 6,
+  "num_imem_words": 22,
+  "total_weights": 1120,
+  "total_biases": 54,
+  "class_names": [
+    "WALKING",
+    "WALKING_UPSTAIRS",
+    "WALKING_DOWNSTAIRS",
+    "SITTING",
+    "STANDING",
+    "LAYING"
+  ],
+  "predicted_class": 0,
+  "predicted_label": "WALKING",
+  "layer_scales": [
+    {
+      "in": 0.10167147418645424,
+      "w": 0.010414189241063876,
+      "out": 0.08218917696494756,
+      "m0": 1770597285,
+      "shift": 6
+    },
+    {
+      "in": 0.08218917696494756,
+      "w": 0.008798728777667669,
+      "out": 0.14078903198242188,
+      "m0": 1411905320,
+      "shift": 7
+    },
+    {
+      "in": 0.14078903198242188,
+      "w": 0.014371639161598025,
+      "out": 0.24521078274944635,
+      "m0": 1134084470,
+      "shift": 6
+    }
+  ],
+  "layers": [
+    {
+      "name": "layer_1",
+      "in_features": 16,
+      "out_features": 32,
+      "activation": "RELU",
+      "m0": 1770597285,
+      "shift": 6
+    },
+    {
+      "name": "layer_2",
+      "in_features": 32,
+      "out_features": 16,
+      "activation": "RELU",
+      "m0": 1411905320,
+      "shift": 7
+    },
+    {
+      "name": "layer_3",
+      "in_features": 16,
+      "out_features": 6,
+      "activation": "NONE",
+      "m0": 1134084470,
+      "shift": 6
+    }
+  ],
+  "accuracy": {
+    "float_test": 0.7950458092975907,
+    "int8_test": 0.7862232779097387
+  }
 }
-

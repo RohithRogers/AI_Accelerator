@@ -17,3 +17,4 @@ vis.html
 /sw/compiler/test_mat*
 /sw/compiler/test_two*
 /temp
+/flow/__pycache__

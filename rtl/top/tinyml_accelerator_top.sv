@@ -95,6 +95,32 @@ module tinyml_accelerator_top #(
   logic [31:0] dense_requant_m0;
   logic signed [7:0] dense_requant_shift;
 
+  // Convolution config + im2col interconnects
+  logic        cfg_wr_en;
+  logic [7:0]  cfg_img_width;
+  logic [7:0]  cfg_img_height;
+  logic [7:0]  cfg_channels;
+  logic [3:0]  cfg_kernel_size;
+  logic [3:0]  cfg_stride;
+  logic [3:0]  cfg_padding;
+  logic [7:0]  ccfg_img_width;
+  logic [7:0]  ccfg_img_height;
+  logic [7:0]  ccfg_channels;
+  logic [3:0]  ccfg_kernel_size;
+  logic [3:0]  ccfg_stride;
+  logic [3:0]  ccfg_padding;
+  logic        conv_start;
+  logic        conv_busy;
+  logic        conv_done;
+  logic [15:0] conv_input_base;
+  logic [15:0] conv_output_base;
+  logic        im2col_spad_rd_en;
+  logic [15:0] im2col_spad_rd_addr;
+  logic signed [7:0] im2col_spad_rd_data;
+  logic        im2col_spad_wr_en;
+  logic [15:0] im2col_spad_wr_addr;
+  logic signed [7:0] im2col_spad_wr_data;
+
   // Memory Controller Host Ports
   logic        hmem_host_wr_en;
   logic [11:0] hmem_host_wr_addr;
@@ -244,7 +270,22 @@ module tinyml_accelerator_top #(
 
     .omem_wr_en          (omem_wr_en),
     .omem_wr_addr        (omem_wr_addr),
-    .omem_wr_data        (omem_wr_data)
+    .omem_wr_data        (omem_wr_data),
+
+    .cfg_wr_en           (cfg_wr_en),
+    .cfg_img_width       (cfg_img_width),
+    .cfg_img_height      (cfg_img_height),
+    .cfg_channels        (cfg_channels),
+    .cfg_kernel_size     (cfg_kernel_size),
+    .cfg_stride          (cfg_stride),
+    .cfg_padding         (cfg_padding),
+    .ccfg_channels       (ccfg_channels),
+    .ccfg_kernel_size    (ccfg_kernel_size),
+    .conv_start          (conv_start),
+    .conv_busy           (conv_busy),
+    .conv_done           (conv_done),
+    .conv_input_base     (conv_input_base),
+    .conv_output_base    (conv_output_base)
   );
 
   // ---------------------------------------------------------------------------
@@ -332,9 +373,12 @@ module tinyml_accelerator_top #(
   logic [15:0] spad_mux_a_wr_addr;
   logic signed [7:0] spad_mux_a_wr_data;
 
-  assign spad_mux_a_wr_en   = dense_spad_wr_en ? dense_spad_wr_en   : ctrl_spad_wr_en;
-  assign spad_mux_a_wr_addr = dense_spad_wr_en ? dense_spad_wr_addr : ctrl_spad_wr_addr;
-  assign spad_mux_a_wr_data = dense_spad_wr_en ? dense_spad_wr_data : ctrl_spad_wr_data;
+  assign spad_mux_a_wr_en   = dense_spad_wr_en ? dense_spad_wr_en :
+                             im2col_spad_wr_en ? im2col_spad_wr_en : ctrl_spad_wr_en;
+  assign spad_mux_a_wr_addr = dense_spad_wr_en ? dense_spad_wr_addr :
+                             im2col_spad_wr_en ? im2col_spad_wr_addr : ctrl_spad_wr_addr;
+  assign spad_mux_a_wr_data = dense_spad_wr_en ? dense_spad_wr_data :
+                             im2col_spad_wr_en ? im2col_spad_wr_data : ctrl_spad_wr_data;
 
   logic signed [7:0] spad_lane_rd_data [0:SIMD_WIDTH-1];
 
@@ -342,7 +386,8 @@ module tinyml_accelerator_top #(
     for (genvar lane = 0; lane < SIMD_WIDTH; lane++) begin : g_spad_banks
       logic [15:0] lane_rd_addr;
       if (lane == 0) begin : g_lane0_addr
-        assign lane_rd_addr = dense_busy ? dense_spad_rd_addr_bus[15:0] : ctrl_spad_rd_addr;
+        assign lane_rd_addr = dense_busy ? dense_spad_rd_addr_bus[15:0] :
+                              conv_busy  ? im2col_spad_rd_addr : ctrl_spad_rd_addr;
       end else begin : g_lanen_addr
         assign lane_rd_addr = dense_spad_rd_addr_bus[lane*16 +: 16];
       end
@@ -374,8 +419,9 @@ module tinyml_accelerator_top #(
     end
   endgenerate
 
-  assign ctrl_spad_rd_data = spad_lane_rd_data[0];
-  assign spad_host_rd_data = spad_lane_rd_data[0];
+  assign ctrl_spad_rd_data   = spad_lane_rd_data[0];
+  assign im2col_spad_rd_data = spad_lane_rd_data[0];
+  assign spad_host_rd_data   = spad_lane_rd_data[0];
 
   // --- Weight Memory (SIMD_WIDTH Replicated Banks for Parallel Read Lanes) ---
   logic signed [7:0] weight_lane_rd_data [0:SIMD_WIDTH-1];
@@ -468,6 +514,48 @@ module tinyml_accelerator_top #(
   // ---------------------------------------------------------------------------
   // 3. Compute Subsystem
   // ---------------------------------------------------------------------------
+
+  conv_config_reg u_conv_cfg (
+    .clk            (clk),
+    .rst_n          (rst_n),
+    .cfg_wr_en      (cfg_wr_en),
+    .cfg_img_width  (cfg_img_width),
+    .cfg_img_height (cfg_img_height),
+    .cfg_channels   (cfg_channels),
+    .cfg_kernel_size(cfg_kernel_size),
+    .cfg_stride     (cfg_stride),
+    .cfg_padding    (cfg_padding),
+    .out_img_width  (ccfg_img_width),
+    .out_img_height (ccfg_img_height),
+    .out_channels   (ccfg_channels),
+    .out_kernel_size(ccfg_kernel_size),
+    .out_stride     (ccfg_stride),
+    .out_padding    (ccfg_padding)
+  );
+
+  im2col_unit #(
+    .SPAD_DEPTH(SPAD_DEPTH)
+  ) u_im2col (
+    .clk          (clk),
+    .rst_n        (rst_n),
+    .start        (conv_start),
+    .busy         (conv_busy),
+    .done         (conv_done),
+    .img_width    (ccfg_img_width),
+    .img_height   (ccfg_img_height),
+    .channels     (ccfg_channels),
+    .kernel_size  ({4'h0, ccfg_kernel_size}),
+    .stride       ({4'h0, ccfg_stride}),
+    .padding      ({4'h0, ccfg_padding}),
+    .input_base   (conv_input_base),
+    .output_base  (conv_output_base),
+    .spad_rd_en   (im2col_spad_rd_en),
+    .spad_rd_addr (im2col_spad_rd_addr),
+    .spad_rd_data (im2col_spad_rd_data),
+    .spad_wr_en   (im2col_spad_wr_en),
+    .spad_wr_addr (im2col_spad_wr_addr),
+    .spad_wr_data (im2col_spad_wr_data)
+  );
 
   dense_engine #(
     .SIMD_WIDTH    (SIMD_WIDTH),

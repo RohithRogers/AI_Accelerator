@@ -102,27 +102,59 @@ module controller_fsm (
   // ---- Output memory write (STORE_COPY destination) -------------------------
   output logic        omem_wr_en,
   output logic [15:0] omem_wr_addr,
-  output logic signed [7:0] omem_wr_data
+  output logic signed [7:0] omem_wr_data,
+
+  // ---- Convolution configuration register write interface -------------------
+  output logic        cfg_wr_en,
+  output logic [7:0]  cfg_img_width,
+  output logic [7:0]  cfg_img_height,
+  output logic [7:0]  cfg_channels,
+  output logic [3:0]  cfg_kernel_size,
+  output logic [3:0]  cfg_stride,
+  output logic [3:0]  cfg_padding,
+
+  // ---- Convolution configuration readback (for patch size computation) ------
+  input  logic [7:0]  ccfg_channels,
+  input  logic [3:0]  ccfg_kernel_size,
+
+  // ---- im2col unit control interface ----------------------------------------
+  output logic        conv_start,
+  input  logic        conv_busy,
+  input  logic        conv_done,
+  output logic [15:0] conv_input_base,
+  output logic [15:0] conv_output_base
 );
 
+  logic [15:0] conv_ksq;
+  logic [15:0] conv_cfg_channels_16;
+  logic [15:0] conv_col_len;
+  logic [15:0] conv_col_base;
+  logic [15:0] conv_out_total;
+  logic [15:0] conv_out_idx;
+
   // ---------------------------------------------------------------------------
-  // FSM state encoding (binary — 4 bits for 14 states)
+  // FSM state encoding (binary — 5 bits for 19 states)
   // ---------------------------------------------------------------------------
-  typedef enum logic [3:0] {
-    ST_IDLE        = 4'd0,
-    ST_FETCH       = 4'd1,
-    ST_DECODE      = 4'd2,
-    ST_DISPATCH    = 4'd3,
-    ST_LOAD_COPY   = 4'd4,
-    ST_STORE_COPY  = 4'd5,
-    ST_DENSE_START = 4'd6,
-    ST_DENSE_WAIT  = 4'd7,
-    ST_ACT_LOOP    = 4'd8,
-    ST_NOP_ST      = 4'd9,
-    ST_RETIRE      = 4'd10,
-    ST_DONE_ST     = 4'd11,
-    ST_END_ST      = 4'd12,
-    ST_ERROR_ST    = 4'd13
+  typedef enum logic [4:0] {
+    ST_IDLE            = 5'd0,
+    ST_FETCH           = 5'd1,
+    ST_DECODE          = 5'd2,
+    ST_DISPATCH        = 5'd3,
+    ST_LOAD_COPY       = 5'd4,
+    ST_STORE_COPY      = 5'd5,
+    ST_DENSE_START     = 5'd6,
+    ST_DENSE_WAIT      = 5'd7,
+    ST_ACT_LOOP        = 5'd8,
+    ST_NOP_ST          = 5'd9,
+    ST_RETIRE          = 5'd10,
+    ST_DONE_ST         = 5'd11,
+    ST_END_ST          = 5'd12,
+    ST_ERROR_ST        = 5'd13,
+    ST_CONV_CFG_WR     = 5'd14,
+    ST_IM2COL_START    = 5'd15,
+    ST_IM2COL_WAIT     = 5'd16,
+    ST_CONV_DENSE_START= 5'd17,
+    ST_CONV_DENSE_WAIT = 5'd18
   } state_t;
 
   state_t current_state, next_state;
@@ -171,8 +203,17 @@ module controller_fsm (
       pipe_valid       <= 1'b0;
       fetch_req        <= 1'b0;
       act_addr         <= 16'h0000;
+      conv_out_total   <= 16'h0000;
+      conv_out_idx     <= 16'h0000;
     end else begin
       current_state <= next_state;
+
+      if (current_state == ST_IM2COL_START) begin
+        conv_out_total <= latched_instr.out_h * latched_instr.out_w;
+        conv_out_idx   <= 16'h0000;
+      end else if (current_state == ST_CONV_DENSE_WAIT && dense_done && (conv_out_idx + 16'd1 < conv_out_total)) begin
+        conv_out_idx <= conv_out_idx + 16'd1;
+      end
 
       // ---- Manage 1-cycle fetch request strobe -----------------------------
       if (current_state == ST_IDLE && start)
@@ -235,9 +276,17 @@ module controller_fsm (
   end
 
   // ---------------------------------------------------------------------------
+  // Conv helper assignments (continuous, so no Icarus always_comb limitation)
+  // ---------------------------------------------------------------------------
+  assign conv_cfg_channels_16 = {8'h00, ccfg_channels};
+  assign conv_ksq             = {12'h000, ccfg_kernel_size} * {12'h000, ccfg_kernel_size};
+  assign conv_col_len         = conv_cfg_channels_16 * conv_ksq;
+  assign conv_col_base        = latched_instr.output_addr + latched_instr.out_h * latched_instr.out_w;
+
+  // ---------------------------------------------------------------------------
   // Combinational block: next-state logic + output driving
   // ---------------------------------------------------------------------------
-  always_comb begin
+  always @* begin
     // ---- Default outputs (safe idle values) --------------------------------
     next_state          = current_state;
     busy                = 1'b0;
@@ -257,6 +306,16 @@ module controller_fsm (
     dense_activation    = 8'(latched_instr.activation);
     dense_requant_m0    = latched_instr.m0;
     dense_requant_shift = latched_instr.shift;
+    cfg_wr_en           = 1'b0;
+    cfg_img_width       = 8'h00;
+    cfg_img_height      = 8'h00;
+    cfg_channels        = 8'h00;
+    cfg_kernel_size     = 4'h0;
+    cfg_stride          = 4'h0;
+    cfg_padding         = 4'h0;
+    conv_start          = 1'b0;
+    conv_input_base     = 16'h0000;
+    conv_output_base    = 16'h0000;
     spad_wr_en          = 1'b0;
     spad_wr_addr        = 16'h0000;
     spad_wr_data        = 8'sd0;
@@ -302,13 +361,15 @@ module controller_fsm (
           next_state = ST_ERROR_ST;
         end else begin
           case (latched_instr.opcode)
-            OP_NOP  : next_state = ST_NOP_ST;
-            OP_LOAD : next_state = ST_LOAD_COPY;
-            OP_STORE: next_state = ST_STORE_COPY;
-            OP_DENSE: next_state = ST_DENSE_START;
-            OP_ACT  : next_state = ST_ACT_LOOP;
-            OP_END  : next_state = ST_END_ST;
-            default : next_state = ST_ERROR_ST;
+            OP_NOP      : next_state = ST_NOP_ST;
+            OP_LOAD     : next_state = ST_LOAD_COPY;
+            OP_STORE    : next_state = ST_STORE_COPY;
+            OP_DENSE    : next_state = ST_DENSE_START;
+            OP_ACT      : next_state = ST_ACT_LOOP;
+            OP_END      : next_state = ST_END_ST;
+            OP_CONV_CFG : next_state = ST_CONV_CFG_WR;
+            OP_CONV     : next_state = ST_IM2COL_START;
+            default     : next_state = ST_ERROR_ST;
           endcase
         end
       end
@@ -379,6 +440,76 @@ module controller_fsm (
           next_state = ST_RETIRE;
         else
           next_state = ST_DENSE_WAIT;
+      end
+
+      // ---------------------------------------------------------------
+      ST_CONV_CFG_WR: begin
+        busy            = 1'b1;
+        cfg_wr_en       = 1'b1;
+        cfg_img_width   = latched_instr.w_in[7:0];
+        cfg_img_height  = latched_instr.h_in[7:0];
+        cfg_channels    = latched_instr.in_channels[7:0];
+        cfg_kernel_size = latched_instr.kh[3:0];
+        cfg_stride      = latched_instr.stride[3:0];
+        cfg_padding     = latched_instr.pad[3:0];
+        next_state      = ST_RETIRE;
+      end
+
+      // ---------------------------------------------------------------
+      ST_IM2COL_START: begin
+        busy            = 1'b1;
+        conv_start      = 1'b1;
+        conv_input_base = latched_instr.input_addr;
+        conv_output_base= conv_col_base;  // Reserve temporary im2col scratch area distinct from final output
+        next_state      = ST_IM2COL_WAIT;
+      end
+
+      // ---------------------------------------------------------------
+      ST_IM2COL_WAIT: begin
+        busy = 1'b1;
+        if (conv_done)
+          next_state = ST_CONV_DENSE_START;
+        else
+          next_state = ST_IM2COL_WAIT;
+      end
+
+      // ---------------------------------------------------------------
+      ST_CONV_DENSE_START: begin
+        busy             = 1'b1;
+        dense_start      = 1'b1;
+        dense_input_addr = conv_col_base + (conv_out_idx * conv_col_len);
+        dense_weight_addr= latched_instr.weight_addr;
+        dense_output_addr= latched_instr.output_addr + conv_out_idx;
+        dense_bias_addr  = latched_instr.bias_addr;
+        dense_input_len  = conv_col_len;
+        dense_output_len = 16'd1;
+        dense_activation = 8'(latched_instr.activation);
+        dense_requant_m0 = latched_instr.m0;
+        dense_requant_shift = latched_instr.shift;
+        next_state       = ST_CONV_DENSE_WAIT;
+      end
+
+      // ---------------------------------------------------------------
+      ST_CONV_DENSE_WAIT: begin
+        busy             = 1'b1;
+        dense_input_addr = conv_col_base + (conv_out_idx * conv_col_len);
+        dense_weight_addr= latched_instr.weight_addr;
+        dense_output_addr= latched_instr.output_addr + conv_out_idx;
+        dense_bias_addr  = latched_instr.bias_addr;
+        dense_input_len  = conv_col_len;
+        dense_output_len = 16'd1;
+        dense_activation = 8'(latched_instr.activation);
+        dense_requant_m0 = latched_instr.m0;
+        dense_requant_shift = latched_instr.shift;
+        if (dense_error)
+          next_state = ST_ERROR_ST;
+        else if (dense_done) begin
+          if (conv_out_idx + 16'd1 < conv_out_total)
+            next_state = ST_CONV_DENSE_START;
+          else
+            next_state = ST_RETIRE;
+        end else
+          next_state = ST_CONV_DENSE_WAIT;
       end
 
       // ---------------------------------------------------------------

@@ -61,6 +61,7 @@ module controller_fsm (
   output logic        fetch_start,       // pulse to begin a fetch
   input  logic        instr_valid,       // one-cycle pulse: words assembled
   input  logic        fetch_error,       // illegal header opcode from fetch unit
+  input  logic [15:0] fetch_next_pc,     // next word address from instruction_fetch
   input  logic [31:0] w0, w1, w2, w3,   // raw word bundle for decoder
 
   // ---- Decoded instruction (combinational from instruction_decoder) ----------
@@ -109,13 +110,17 @@ module controller_fsm (
   output logic [7:0]  cfg_img_width,
   output logic [7:0]  cfg_img_height,
   output logic [7:0]  cfg_channels,
-  output logic [3:0]  cfg_kernel_size,
+  output logic [7:0]  cfg_out_channels,
+  output logic [7:0]  cfg_kernel_h,
+  output logic [7:0]  cfg_kernel_w,
   output logic [3:0]  cfg_stride,
   output logic [3:0]  cfg_padding,
 
   // ---- Convolution configuration readback (for patch size computation) ------
   input  logic [7:0]  ccfg_channels,
-  input  logic [3:0]  ccfg_kernel_size,
+  input  logic [7:0]  ccfg_out_channels,
+  input  logic [7:0]  ccfg_kernel_h,
+  input  logic [7:0]  ccfg_kernel_w,
 
   // ---- im2col unit control interface ----------------------------------------
   output logic        conv_start,
@@ -125,7 +130,6 @@ module controller_fsm (
   output logic [15:0] conv_output_base
 );
 
-  logic [15:0] conv_ksq;
   logic [15:0] conv_cfg_channels_16;
   logic [15:0] conv_col_len;
   logic [15:0] conv_col_base;
@@ -173,7 +177,6 @@ module controller_fsm (
   logic [15:0] copy_write_count;   // number of write responses committed (0..length)
   logic [15:0] pipe_dst_addr;      // latched destination address for 1-cycle latency write
   logic        pipe_valid;         // indicates read data is valid on this cycle
-  logic        fetch_req;          // 1-cycle strobe to start fetch after PC commits
 
   // ACT_LOOP iteration registers
   logic [15:0] act_addr;           // current element base address
@@ -189,7 +192,7 @@ module controller_fsm (
   // ---------------------------------------------------------------------------
   // Sequential block: state register + working registers
   // ---------------------------------------------------------------------------
-  always_ff @(posedge clk or negedge rst_n) begin
+  always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       current_state    <= ST_IDLE;
       latched_instr    <= '0;
@@ -201,7 +204,7 @@ module controller_fsm (
       copy_write_count <= 16'h0000;
       pipe_dst_addr    <= 16'h0000;
       pipe_valid       <= 1'b0;
-      fetch_req        <= 1'b0;
+      fetch_start      <= 1'b0;
       act_addr         <= 16'h0000;
       conv_out_total   <= 16'h0000;
       conv_out_idx     <= 16'h0000;
@@ -215,17 +218,15 @@ module controller_fsm (
         conv_out_idx <= conv_out_idx + 16'd1;
       end
 
-      // ---- Manage 1-cycle fetch request strobe -----------------------------
-      if (current_state == ST_IDLE && start)
-        fetch_req <= 1'b1;
-      else if (current_state == ST_RETIRE)
-        fetch_req <= 1'b1;
-      else if (fetch_req)
-        fetch_req <= 1'b0;
+      // Registered one-cycle instruction-fetch command.  Registering this
+      // boundary avoids a zero-delay controller/fetch feedback path.
+      fetch_start <= 1'b0;
+      if ((current_state == ST_IDLE && start) || current_state == ST_RETIRE)
+        fetch_start <= 1'b1;
 
       // ---- FETCH: capture next_pc when instruction words arrive ------------
       if (current_state == ST_FETCH && instr_valid)
-        next_pc_latch <= instr.next_pc;
+        next_pc_latch <= fetch_next_pc;
 
       // ---- DECODE: latch the fully-decoded instruction for one cycle -------
       if (current_state == ST_DECODE)
@@ -279,9 +280,10 @@ module controller_fsm (
   // Conv helper assignments (continuous, so no Icarus always_comb limitation)
   // ---------------------------------------------------------------------------
   assign conv_cfg_channels_16 = {8'h00, ccfg_channels};
-  assign conv_ksq             = {12'h000, ccfg_kernel_size} * {12'h000, ccfg_kernel_size};
-  assign conv_col_len         = conv_cfg_channels_16 * conv_ksq;
-  assign conv_col_base        = latched_instr.output_addr + latched_instr.out_h * latched_instr.out_w;
+  assign conv_col_len         = conv_cfg_channels_16 * ccfg_kernel_h * ccfg_kernel_w;
+  // Final output is spatial-major: [out_y][out_x][out_channel].
+  assign conv_col_base        = latched_instr.output_addr +
+                                latched_instr.out_h * latched_instr.out_w * ccfg_out_channels;
 
   // ---------------------------------------------------------------------------
   // Combinational block: next-state logic + output driving
@@ -293,7 +295,6 @@ module controller_fsm (
     done                = 1'b0;
     error               = 1'b0;
     error_code          = 8'h00;
-    fetch_start         = 1'b0;
     pc_write            = 1'b0;
     pc_next             = next_pc_latch;
     dense_start         = 1'b0;
@@ -310,7 +311,9 @@ module controller_fsm (
     cfg_img_width       = 8'h00;
     cfg_img_height      = 8'h00;
     cfg_channels        = 8'h00;
-    cfg_kernel_size     = 4'h0;
+    cfg_out_channels    = 8'h00;
+    cfg_kernel_h        = 8'h00;
+    cfg_kernel_w        = 8'h00;
     cfg_stride          = 4'h0;
     cfg_padding         = 4'h0;
     conv_start          = 1'b0;
@@ -338,7 +341,6 @@ module controller_fsm (
       // ---------------------------------------------------------------
       ST_FETCH: begin
         busy        = 1'b1;
-        fetch_start = fetch_req;
         if (fetch_error)
           next_state = ST_ERROR_ST;
         else if (instr_valid)
@@ -449,7 +451,9 @@ module controller_fsm (
         cfg_img_width   = latched_instr.w_in[7:0];
         cfg_img_height  = latched_instr.h_in[7:0];
         cfg_channels    = latched_instr.in_channels[7:0];
-        cfg_kernel_size = latched_instr.kh[3:0];
+        cfg_out_channels= latched_instr.out_channels[7:0];
+        cfg_kernel_h    = latched_instr.kh[7:0];
+        cfg_kernel_w    = latched_instr.kw[7:0];
         cfg_stride      = latched_instr.stride[3:0];
         cfg_padding     = latched_instr.pad[3:0];
         next_state      = ST_RETIRE;
@@ -479,10 +483,10 @@ module controller_fsm (
         dense_start      = 1'b1;
         dense_input_addr = conv_col_base + (conv_out_idx * conv_col_len);
         dense_weight_addr= latched_instr.weight_addr;
-        dense_output_addr= latched_instr.output_addr + conv_out_idx;
+        dense_output_addr= latched_instr.output_addr + (conv_out_idx * ccfg_out_channels);
         dense_bias_addr  = latched_instr.bias_addr;
         dense_input_len  = conv_col_len;
-        dense_output_len = 16'd1;
+        dense_output_len = {8'h00, ccfg_out_channels};
         dense_activation = 8'(latched_instr.activation);
         dense_requant_m0 = latched_instr.m0;
         dense_requant_shift = latched_instr.shift;
@@ -494,10 +498,10 @@ module controller_fsm (
         busy             = 1'b1;
         dense_input_addr = conv_col_base + (conv_out_idx * conv_col_len);
         dense_weight_addr= latched_instr.weight_addr;
-        dense_output_addr= latched_instr.output_addr + conv_out_idx;
+        dense_output_addr= latched_instr.output_addr + (conv_out_idx * ccfg_out_channels);
         dense_bias_addr  = latched_instr.bias_addr;
         dense_input_len  = conv_col_len;
-        dense_output_len = 16'd1;
+        dense_output_len = {8'h00, ccfg_out_channels};
         dense_activation = 8'(latched_instr.activation);
         dense_requant_m0 = latched_instr.m0;
         dense_requant_shift = latched_instr.shift;

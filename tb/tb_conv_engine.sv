@@ -26,16 +26,27 @@ module tb_conv_engine;
   logic signed [7:0] host_rd_data8;
 
   integer fail_count;
+  integer debug_cycles;
 
   always #5 clk = ~clk;
+
+  always @(posedge clk) begin
+    if (debug_cycles < 100) begin
+      $display("t=%0t ctrl=%0d fetch=%0d dense=%0d im2col=%0d busy=%b", $time,
+               dut.u_controller.current_state, dut.u_fetch.state,
+               dut.u_dense_engine.state, dut.u_im2col.state, busy);
+      $fflush();
+      debug_cycles = debug_cycles + 1;
+    end
+  end
 
   tinyml_accelerator_top #(
     .IMEM_DEPTH_WORDS (1024),
     .SPAD_DEPTH       (4096),
-    .PARAM_DEPTH      (65536),
+    .PARAM_DEPTH      (1024),
     .OUT_DEPTH        (4096),
     .HMEM_DEPTH       (4096),
-    .SIMD_WIDTH       (4),
+    .SIMD_WIDTH       (1),
     .ACC_WIDTH        (32),
     .REQUANT_SHIFT    (0),
     .RELU6_MAX        (127)
@@ -140,6 +151,8 @@ module tb_conv_engine;
 
   initial begin
     logic signed [7:0] got;
+    $display("tb_conv_engine: starting");
+    $fflush();
     clk            = 0;
     rst_n          = 0;
     start          = 0;
@@ -150,15 +163,20 @@ module tb_conv_engine;
     host_wr_data32 = 0;
     host_wr_data8  = 0;
     fail_count     = 0;
+    debug_cycles   = 0;
+
 
     #20 rst_n = 1;
     #20;
+    $display("tb_conv_engine: reset released");
+    $fflush();
 
     // ---------------------------------------------------------------------
-    // 4x4 input, 1-channel, 3x3 kernel, no pad, stride=1 => 2x2 output.
+    // 4x4 input, 1 channel, two 3x3 filters, no pad, stride 1 => 2x2x2 output.
     // Input feature map is loaded into SPAD at address 0x0000.
     // Kernel weights are stored in weight memory at address 0x0100.
-    // The CONV output column buffer is produced in SPAD at address 0x1000.
+    // Final output is at 0x0200; im2col temporary patches begin at 0x0204.
+    // Both ranges are inside the 4 KiB scratchpad (0x0000..0x0fff).
     // ---------------------------------------------------------------------
     $display("=== CONV TEST: 1x1 4x4 -> 2x2, 3x3 kernel, no padding ===");
 
@@ -168,53 +186,56 @@ module tb_conv_engine;
     write_spad(16'd8,  8'sd9);  write_spad(16'd9,  8'sd10); write_spad(16'd10, 8'sd11); write_spad(16'd11, 8'sd12);
     write_spad(16'd12, 8'sd13); write_spad(16'd13, 8'sd14); write_spad(16'd14, 8'sd15); write_spad(16'd15, 8'sd16);
 
-    // 3x3 kernel of all ones, repeated for each output pixel in the dense matmul view:
-    // row 0: output pixel 0 weights, row 1: output pixel 1 weights, row 2: output pixel 2 weights, row 3: output pixel 3 weights
-    for (int i = 0; i < 4; i++) begin
-      write_weight(16'h0100 + i*9 + 0, 8'sd1); write_weight(16'h0100 + i*9 + 1, 8'sd1); write_weight(16'h0100 + i*9 + 2, 8'sd1);
-      write_weight(16'h0100 + i*9 + 3, 8'sd1); write_weight(16'h0100 + i*9 + 4, 8'sd1); write_weight(16'h0100 + i*9 + 5, 8'sd1);
-      write_weight(16'h0100 + i*9 + 6, 8'sd1); write_weight(16'h0100 + i*9 + 7, 8'sd1); write_weight(16'h0100 + i*9 + 8, 8'sd1);
-    end
+    // Filter 0 = all ones.  Filter 1 selects the patch top-left value.
+    for (int i = 0; i < 9; i++) write_weight(16'h0100 + i, 8'sd1);
+    write_weight(16'h0109, 8'sd1);
+    for (int i = 1; i < 9; i++) write_weight(16'h0109 + i, 8'sd0);
 
-    // Bias per output pixel = 0
-    write_bias(16'h0200, 8'sd0);
-    write_bias(16'h0201, 8'sd0);
-    write_bias(16'h0202, 8'sd0);
-    write_bias(16'h0203, 8'sd0);
+    // One bias per output channel, not per output pixel.
+    write_bias(16'h0300, 8'sd0);
+    write_bias(16'h0301, 8'sd1);
 
-    // CONV_CFG: C_in=1, out_channels=1, H_in=4, W_in=4, K=3, stride=1, pad=0
+    // CONV_CFG: C_in=1, out_channels=2, H_in=4, W_in=4, K=3, stride=1, pad=0
     write_imem(16'd0, 32'h06000000);
-    write_imem(16'd1, 32'h00010001);
+    write_imem(16'd1, 32'h00010002);
     write_imem(16'd2, 32'h00040004);
     write_imem(16'd3, 32'h00030003);
     write_imem(16'd4, 32'h00010000);
 
-    // CONV: input_addr=0x0000, weight_addr=0x0100, output_addr=0x1000, bias_addr=0x0200,
+    // CONV: input_addr=0x0000, weight_addr=0x0100, output_addr=0x0200, bias_addr=0x0300,
     //      out_h=2, out_w=2, activation=NONE, shift=-31, M0=1
     write_imem(16'd5, 32'h070000e1);
     write_imem(16'd6, 32'h00000100);
-    write_imem(16'd7, 32'h10000200);
+    write_imem(16'd7, 32'h02000300);
     write_imem(16'd8, 32'h00020002);
     write_imem(16'd9, 32'h00000001);
 
     // END
     write_imem(16'd10, 32'h05000000);
 
+    $display("tb_conv_engine: program loaded");
+    $fflush();
+
     run_program(2000);
 
     if (!error) begin
-      // Output buffer layout: 2x2 spatial map in SPAD at 0x1000
-      read_spad(16'h1000, got); $display("spad[0x1000] = %0d", $signed(got));
+      // Output layout is spatial-major: [pixel0_ch0, pixel0_ch1, pixel1_ch0, ...].
+      read_spad(16'h0200, got); $display("spad[0x0200] = %0d", $signed(got));
       if ($signed(got) !== 54) begin $error("Output[0] got=%0d expected=54", $signed(got)); fail_count++; end
 
-      read_spad(16'h1001, got); $display("spad[0x1001] = %0d", $signed(got));
-      if ($signed(got) !== 63) begin $error("Output[1] got=%0d expected=63", $signed(got)); fail_count++; end
+      read_spad(16'h0201, got); $display("spad[0x0201] = %0d", $signed(got));
+      if ($signed(got) !== 2) begin $error("Output[1] got=%0d expected=2", $signed(got)); fail_count++; end
 
-      read_spad(16'h1002, got); $display("spad[0x1002] = %0d", $signed(got));
-      if ($signed(got) !== 90) begin $error("Output[2] got=%0d expected=90", $signed(got)); fail_count++; end
+      read_spad(16'h0202, got); $display("spad[0x0202] = %0d", $signed(got));
+      if ($signed(got) !== 63) begin $error("Output[2] got=%0d expected=63", $signed(got)); fail_count++; end
 
-      read_spad(16'h1003, got); $display("spad[0x1003] = %0d", $signed(got));
-      if ($signed(got) !== 99) begin $error("Output[3] got=%0d expected=99", $signed(got)); fail_count++; end
+      read_spad(16'h0203, got); $display("spad[0x0203] = %0d", $signed(got));
+      if ($signed(got) !== 3) begin $error("Output[3] got=%0d expected=3", $signed(got)); fail_count++; end
+
+      read_spad(16'h0204, got); if ($signed(got) !== 90) begin $error("Output[4] got=%0d expected=90", $signed(got)); fail_count++; end
+      read_spad(16'h0205, got); if ($signed(got) !== 6)  begin $error("Output[5] got=%0d expected=6",  $signed(got)); fail_count++; end
+      read_spad(16'h0206, got); if ($signed(got) !== 99) begin $error("Output[6] got=%0d expected=99", $signed(got)); fail_count++; end
+      read_spad(16'h0207, got); if ($signed(got) !== 7)  begin $error("Output[7] got=%0d expected=7",  $signed(got)); fail_count++; end
     end
 
     if (fail_count == 0) begin

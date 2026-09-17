@@ -34,7 +34,9 @@ module conv_config_reg (
     input  logic [7:0]  cfg_img_width,
     input  logic [7:0]  cfg_img_height,
     input  logic [7:0]  cfg_channels,
-    input  logic [3:0]  cfg_kernel_size,
+    input  logic [7:0]  cfg_out_channels,
+    input  logic [7:0]  cfg_kernel_h,
+    input  logic [7:0]  cfg_kernel_w,
     input  logic [3:0]  cfg_stride,
     input  logic [3:0]  cfg_padding,
 
@@ -42,7 +44,9 @@ module conv_config_reg (
     output logic [7:0]  out_img_width,
     output logic [7:0]  out_img_height,
     output logic [7:0]  out_channels,
-    output logic [3:0]  out_kernel_size,
+    output logic [7:0]  out_out_channels,
+    output logic [7:0]  out_kernel_h,
+    output logic [7:0]  out_kernel_w,
     output logic [3:0]  out_stride,
     output logic [3:0]  out_padding
 );
@@ -52,14 +56,18 @@ module conv_config_reg (
             out_img_width   <= 8'h00;
             out_img_height  <= 8'h00;
             out_channels    <= 8'h01;
-            out_kernel_size <= 4'h1;
+            out_out_channels<= 8'h01;
+            out_kernel_h    <= 8'h01;
+            out_kernel_w    <= 8'h01;
             out_stride      <= 4'h1;
             out_padding     <= 4'h0;
         end else if (cfg_wr_en) begin
             out_img_width   <= cfg_img_width;
             out_img_height  <= cfg_img_height;
             out_channels    <= cfg_channels;
-            out_kernel_size <= cfg_kernel_size;
+            out_out_channels<= cfg_out_channels;
+            out_kernel_h    <= cfg_kernel_h;
+            out_kernel_w    <= cfg_kernel_w;
             out_stride      <= cfg_stride;
             out_padding     <= cfg_padding;
         end

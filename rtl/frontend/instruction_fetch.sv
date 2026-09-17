@@ -75,7 +75,7 @@ module instruction_fetch (
   logic [15:0] total_words;
   logic [2:0]  current_op_idx;
 
-  always_ff @(posedge clk or negedge rst_n) begin
+  always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state          <= ST_IDLE;
       instr_valid    <= 1'b0;

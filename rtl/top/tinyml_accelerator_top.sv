@@ -61,12 +61,6 @@ module tinyml_accelerator_top #(
 
   // Decoder <-> Controller
   decoded_instr_t decoded_instr_raw;
-  decoded_instr_t decoded_instr;
-
-  always_comb begin
-    decoded_instr = decoded_instr_raw;
-    decoded_instr.next_pc = fetch_next_pc;
-  end
 
   // Instruction Memory Interconnects
   logic        imem_rd_en;
@@ -100,13 +94,17 @@ module tinyml_accelerator_top #(
   logic [7:0]  cfg_img_width;
   logic [7:0]  cfg_img_height;
   logic [7:0]  cfg_channels;
-  logic [3:0]  cfg_kernel_size;
+  logic [7:0]  cfg_out_channels;
+  logic [7:0]  cfg_kernel_h;
+  logic [7:0]  cfg_kernel_w;
   logic [3:0]  cfg_stride;
   logic [3:0]  cfg_padding;
   logic [7:0]  ccfg_img_width;
   logic [7:0]  ccfg_img_height;
   logic [7:0]  ccfg_channels;
-  logic [3:0]  ccfg_kernel_size;
+  logic [7:0]  ccfg_out_channels;
+  logic [7:0]  ccfg_kernel_h;
+  logic [7:0]  ccfg_kernel_w;
   logic [3:0]  ccfg_stride;
   logic [3:0]  ccfg_padding;
   logic        conv_start;
@@ -233,11 +231,12 @@ module tinyml_accelerator_top #(
     .fetch_start         (fetch_start),
     .instr_valid         (instr_valid),
     .fetch_error         (fetch_error),
+    .fetch_next_pc       (fetch_next_pc),
     .w0                  (w0),
     .w1                  (w1),
     .w2                  (w2),
     .w3                  (w3),
-    .instr               (decoded_instr),
+    .instr               (decoded_instr_raw),
 
     .pc_write            (pc_write),
     .pc_next             (pc_next),
@@ -276,11 +275,15 @@ module tinyml_accelerator_top #(
     .cfg_img_width       (cfg_img_width),
     .cfg_img_height      (cfg_img_height),
     .cfg_channels        (cfg_channels),
-    .cfg_kernel_size     (cfg_kernel_size),
+    .cfg_out_channels    (cfg_out_channels),
+    .cfg_kernel_h        (cfg_kernel_h),
+    .cfg_kernel_w        (cfg_kernel_w),
     .cfg_stride          (cfg_stride),
     .cfg_padding         (cfg_padding),
     .ccfg_channels       (ccfg_channels),
-    .ccfg_kernel_size    (ccfg_kernel_size),
+    .ccfg_out_channels   (ccfg_out_channels),
+    .ccfg_kernel_h       (ccfg_kernel_h),
+    .ccfg_kernel_w       (ccfg_kernel_w),
     .conv_start          (conv_start),
     .conv_busy           (conv_busy),
     .conv_done           (conv_done),
@@ -350,9 +353,12 @@ module tinyml_accelerator_top #(
   logic                                imem_mux_rd_en;
   logic [$clog2(IMEM_DEPTH_WORDS)-1:0] imem_mux_rd_addr;
 
-  assign imem_mux_rd_en   = busy ? imem_rd_en : imem_host_rd_en;
-  assign imem_mux_rd_addr = busy ? imem_rd_addr[$clog2(IMEM_DEPTH_WORDS)-1:0] :
-                                   imem_host_rd_addr[$clog2(IMEM_DEPTH_WORDS)-1:0];
+  // The execution port has priority.  Host writes are already blocked by the
+  // memory controller while busy, so this avoids using the controller's busy
+  // output as a combinational RAM-port mux select.
+  assign imem_mux_rd_en   = imem_rd_en | imem_host_rd_en;
+  assign imem_mux_rd_addr = imem_rd_en ? imem_rd_addr[$clog2(IMEM_DEPTH_WORDS)-1:0] :
+                                       imem_host_rd_addr[$clog2(IMEM_DEPTH_WORDS)-1:0];
 
   instruction_memory #(
     .DEPTH(IMEM_DEPTH_WORDS)
@@ -430,7 +436,7 @@ module tinyml_accelerator_top #(
     for (genvar lane = 0; lane < SIMD_WIDTH; lane++) begin : g_weight_banks
       logic [15:0] wt_lane_rd_addr;
       if (lane == 0) begin : g_wt_lane0
-        assign wt_lane_rd_addr = busy ? dense_weight_rd_addr_bus[15:0] : weight_host_rd_addr;
+        assign wt_lane_rd_addr = dense_busy ? dense_weight_rd_addr_bus[15:0] : weight_host_rd_addr;
       end else begin : g_wt_lanen
         assign wt_lane_rd_addr = dense_weight_rd_addr_bus[lane*16 +: 16];
       end
@@ -456,7 +462,7 @@ module tinyml_accelerator_top #(
 
   // --- Bias Memory ---
   logic [15:0] bias_mux_rd_addr;
-  assign bias_mux_rd_addr = busy ? dense_bias_rd_addr : bias_host_rd_addr;
+  assign bias_mux_rd_addr = dense_busy ? dense_bias_rd_addr : bias_host_rd_addr;
 
   bias_memory #(
     .DEPTH(PARAM_DEPTH)
@@ -485,7 +491,7 @@ module tinyml_accelerator_top #(
     .a_rd_addr (hmem_rd_addr[$clog2(HMEM_DEPTH)-1:0]),
     .a_rd_data (hmem_rd_data),
     .a_wr_en   (1'b0),
-    .a_wr_addr ('0),
+    .a_wr_addr ({$clog2(HMEM_DEPTH){1'b0}}),
     .a_wr_data (8'sd0),
 
     // Port B: Host / UART Interface
@@ -522,13 +528,17 @@ module tinyml_accelerator_top #(
     .cfg_img_width  (cfg_img_width),
     .cfg_img_height (cfg_img_height),
     .cfg_channels   (cfg_channels),
-    .cfg_kernel_size(cfg_kernel_size),
+    .cfg_out_channels(cfg_out_channels),
+    .cfg_kernel_h   (cfg_kernel_h),
+    .cfg_kernel_w   (cfg_kernel_w),
     .cfg_stride     (cfg_stride),
     .cfg_padding    (cfg_padding),
     .out_img_width  (ccfg_img_width),
     .out_img_height (ccfg_img_height),
     .out_channels   (ccfg_channels),
-    .out_kernel_size(ccfg_kernel_size),
+    .out_out_channels(ccfg_out_channels),
+    .out_kernel_h    (ccfg_kernel_h),
+    .out_kernel_w    (ccfg_kernel_w),
     .out_stride     (ccfg_stride),
     .out_padding    (ccfg_padding)
   );
@@ -544,7 +554,8 @@ module tinyml_accelerator_top #(
     .img_width    (ccfg_img_width),
     .img_height   (ccfg_img_height),
     .channels     (ccfg_channels),
-    .kernel_size  ({4'h0, ccfg_kernel_size}),
+    .kernel_h     (ccfg_kernel_h),
+    .kernel_w     (ccfg_kernel_w),
     .stride       ({4'h0, ccfg_stride}),
     .padding      ({4'h0, ccfg_padding}),
     .input_base   (conv_input_base),

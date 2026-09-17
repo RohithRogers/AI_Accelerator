@@ -44,7 +44,8 @@ module im2col_unit #(
     input  logic [7:0]  img_width,       // W_in
     input  logic [7:0]  img_height,      // H_in
     input  logic [7:0]  channels,        // C_in
-    input  logic [7:0]  kernel_size,     // K (square)
+    input  logic [7:0]  kernel_h,
+    input  logic [7:0]  kernel_w,
     input  logic [7:0]  stride,          // S
     input  logic [7:0]  padding,         // P
 
@@ -66,10 +67,12 @@ module im2col_unit #(
     // -------------------------------------------------------------------------
     // Output map dimensions (combinational)
     // -------------------------------------------------------------------------
-    logic [7:0] out_w;
-    logic [7:0] out_h;
-    assign out_w = (img_width  + 2 * padding - kernel_size) / stride + 8'd1;
-    assign out_h = (img_height + 2 * padding - kernel_size) / stride + 8'd1;
+    logic [15:0] out_w;
+    logic [15:0] out_h;
+    assign out_w = (stride == 0 || img_width + 2 * padding < kernel_w) ? 0 :
+                   (img_width  + 2 * padding - kernel_w) / stride + 1;
+    assign out_h = (stride == 0 || img_height + 2 * padding < kernel_h) ? 0 :
+                   (img_height + 2 * padding - kernel_h) / stride + 1;
 
     // -------------------------------------------------------------------------
     // FSM
@@ -88,7 +91,7 @@ module im2col_unit #(
     // Loop counters — iterate: ky -> kx -> c -> ox -> oy (inner to outer)
     logic [7:0] ox, oy;   // output spatial position
     logic [7:0] c;         // input channel
-    logic [3:0] kx, ky;   // kernel position
+    logic [7:0] kx, ky;   // kernel position
 
     // Computed per-iteration
     logic signed [15:0] ix_s, iy_s;  // signed source pixel coords
@@ -99,17 +102,17 @@ module im2col_unit #(
 
     // Sequential iteration: compute addresses combinationally, act in FSM
     assign ix_s = $signed({1'b0, ox}) * $signed({1'b0, stride}) +
-                  $signed({1'b0, {4'b0, kx}}) - $signed({1'b0, padding});
+                  $signed({1'b0, kx}) - $signed({1'b0, padding});
     assign iy_s = $signed({1'b0, oy}) * $signed({1'b0, stride}) +
-                  $signed({1'b0, {4'b0, ky}}) - $signed({1'b0, padding});
+                  $signed({1'b0, ky}) - $signed({1'b0, padding});
 
     assign is_pad  = (ix_s < 16'sd0) | (ix_s >= $signed({1'b0, img_width}))  |
                      (iy_s < 16'sd0) | (iy_s >= $signed({1'b0, img_height}));
 
     assign src_addr = input_base
-                    + 16'(c) * (16'(img_height) * 16'(img_width))
-                    + 16'($unsigned(iy_s)) * 16'(img_width)
-                    + 16'($unsigned(ix_s));
+                    + c * img_height * img_width
+                    + $unsigned(iy_s) * img_width
+                    + $unsigned(ix_s);
 
     // -------------------------------------------------------------------------
     // Sequential block
@@ -120,8 +123,8 @@ module im2col_unit #(
             ox          <= 8'd0;
             oy          <= 8'd0;
             c           <= 8'd0;
-            kx          <= 4'd0;
-            ky          <= 4'd0;
+            kx          <= 8'd0;
+            ky          <= 8'd0;
             dst_ptr     <= 16'd0;
             latched_val <= 8'sd0;
         end else begin
@@ -131,8 +134,8 @@ module im2col_unit #(
                         ox      <= 8'd0;
                         oy      <= 8'd0;
                         c       <= 8'd0;
-                        kx      <= 4'd0;
-                        ky      <= 4'd0;
+                        kx      <= 8'd0;
+                        ky      <= 8'd0;
                         dst_ptr <= output_base;
                         state   <= ST_CALC;
                     end
@@ -160,17 +163,17 @@ module im2col_unit #(
                 ST_WRITE: begin
                     dst_ptr <= dst_ptr + 16'd1;
 
-                    // Advance loop counters (inner -> outer: ky->kx->c->ox->oy)
-                    if (ky + 4'd1 < kernel_size[3:0]) begin
-                        ky <= ky + 4'd1;
+                    // Patch layout is [channel][kernel_y][kernel_x].
+                    if (kx + 8'd1 < kernel_w) begin
+                        kx <= kx + 8'd1;
                         state <= ST_CALC;
                     end else begin
-                        ky <= 4'd0;
-                        if (kx + 4'd1 < kernel_size[3:0]) begin
-                            kx <= kx + 4'd1;
+                        kx <= 8'd0;
+                        if (ky + 8'd1 < kernel_h) begin
+                            ky <= ky + 8'd1;
                             state <= ST_CALC;
                         end else begin
-                            kx <= 4'd0;
+                            ky <= 8'd0;
                             if (c + 8'd1 < channels) begin
                                 c <= c + 8'd1;
                                 state <= ST_CALC;
